@@ -7,19 +7,44 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/jovid18/more-more/apps/server/internal/game"
+	"github.com/jovid18/more-more/apps/server/internal/graph"
+	"github.com/jovid18/more-more/apps/server/internal/hub"
 )
+
+func testMux(t *testing.T) *http.ServeMux {
+	t.Helper()
+
+	board := graph.Yamanote()
+	loop := game.New(board, game.DefaultNeedTicks)
+	return newMux(t.Context(), hub.New(loop, board, TickInterval))
+}
 
 func TestHealthz(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	newMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	testMux(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	if got, want := rec.Body.String(), `{"status":"ok"}`; got != want {
 		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+// 평범한 GET으로 /ws를 때리면 업그레이드가 아니므로 거절돼야 한다.
+// 200이 나온다면 라우팅이 엉뚱한 핸들러에 걸린 것이다.
+func TestWebSocketRouteRejectsPlainRequests(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	testMux(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ws", nil))
+
+	if rec.Code == http.StatusOK {
+		t.Errorf("status = %d, want an upgrade failure", rec.Code)
 	}
 }
 
@@ -42,6 +67,8 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, addr) }()
 
+	// 서버가 뜬 뒤에 취소한다. 뜨기도 전에 취소하면 종료 경로를 지나지 않는다.
+	waitForHealthz(t, addr)
 	cancel()
 
 	select {
@@ -52,4 +79,20 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 	case <-time.After(shutdownTimeout + time.Second):
 		t.Fatal("Run did not return after context cancel")
 	}
+}
+
+func waitForHealthz(t *testing.T, addr string) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	t.Fatal("the server never became reachable")
 }
