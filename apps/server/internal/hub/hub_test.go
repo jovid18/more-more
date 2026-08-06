@@ -30,8 +30,10 @@ type message struct {
 	Stations []graph.Station `json:"stations"`
 	Edges    []graph.Edge    `json:"edges"`
 
-	Tick    uint64             `json:"tick"`
-	Players []game.PlayerState `json:"players"`
+	Tick          uint64             `json:"tick"`
+	Players       []game.PlayerState `json:"players"`
+	EdgeOwners    []game.PlayerID    `json:"edgeOwners"`
+	StationOwners []game.PlayerID    `json:"stationOwners"`
 }
 
 type harness struct {

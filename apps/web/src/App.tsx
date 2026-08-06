@@ -5,6 +5,7 @@ import { ringLayout } from '@/graph/ring';
 import type { Connection, ConnectionStatus } from '@/net/connection';
 import { connect, gameSocketURL } from '@/net/connection';
 import type { Edge, PlayerId, SnapshotMessage } from '@/net/protocol';
+
 import { interpolate } from '@/render/interpolate';
 import type { Frame } from '@/render/scene';
 import { mountScene } from '@/render/scene';
@@ -15,7 +16,15 @@ const mapRadius = 2.4;
 // 매번 새 빈 배열을 넘기면 연결되기 전까지 매 프레임 다시 만든다.
 const noStations: readonly Vec2[] = [];
 const noEdges: readonly Edge[] = [];
-const emptyFrame: Frame = { stations: noStations, edges: noEdges, players: [], you: null };
+const noOwners: readonly PlayerId[] = [];
+const emptyFrame: Frame = {
+  stations: noStations,
+  edges: noEdges,
+  players: [],
+  you: null,
+  edgeOwners: noOwners,
+  stationOwners: noOwners,
+};
 
 interface GameState {
   stations: readonly Vec2[];
@@ -32,6 +41,23 @@ interface Hud {
   status: ConnectionStatus;
   tick: number;
   players: number;
+  /** 내가 가진 구간과 역. 점령이 늘고 있는지를 숫자로 본다. */
+  edges: number;
+  stations: number;
+}
+
+function countOwnedBy(owners: readonly PlayerId[], you: PlayerId | null): number {
+  if (you === null) {
+    return 0;
+  }
+
+  let owned = 0;
+  for (const owner of owners) {
+    if (owner === you) {
+      owned++;
+    }
+  }
+  return owned;
 }
 
 export function App() {
@@ -51,7 +77,7 @@ export function App() {
   });
 
   // 화면에 글자로 나가는 것만 React 상태다.
-  const [hud, setHud] = useState<Hud>({ status: 'connecting', tick: 0, players: 0 });
+  const [hud, setHud] = useState<Hud>({ status: 'connecting', tick: 0, players: 0, edges: 0, stations: 0 });
   const [name] = useState(() => `runner-${Math.floor(Math.random() * 900 + 100)}`);
 
   useEffect(() => {
@@ -75,6 +101,9 @@ export function App() {
         edges: state.edges,
         players: interpolate(state.previous, state.latest, alpha, state.stations),
         you: state.you,
+        // 소유는 보간하지 않는다. 한 틱에 딱 바뀌는 값이라 섞으면 색만 흐려진다.
+        edgeOwners: state.latest.edgeOwners,
+        stationOwners: state.latest.stationOwners,
       };
     });
   }, []);
@@ -104,7 +133,13 @@ export function App() {
         state.latest = message;
         state.latestAt = performance.now();
 
-        setHud((current) => ({ ...current, tick: message.tick, players: message.players.length }));
+        setHud((current) => ({
+          ...current,
+          tick: message.tick,
+          players: message.players.length,
+          edges: countOwnedBy(message.edgeOwners, state.you),
+          stations: countOwnedBy(message.stationOwners, state.you),
+        }));
       },
     });
 
@@ -145,6 +180,10 @@ export function App() {
           <dd>{hud.tick}</dd>
           <dt>players</dt>
           <dd>{hud.players}</dd>
+          <dt>내 구간</dt>
+          <dd>{hud.edges}</dd>
+          <dt>내 역</dt>
+          <dd>{hud.stations}</dd>
         </dl>
       </div>
 
