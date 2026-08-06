@@ -30,10 +30,9 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: apps/server/go.mod
-          # go.sum이 아직 없다(의존성 0개). 없는 파일을 캐시 키로 주면 setup-go가 멈추므로
-          # go.mod를 쓴다. 의존성이 생기면 go.sum으로 바꾸는 편이 정확하다 —
-          # 간접 의존성 버전은 go.mod에 다 적히지 않는다.
-          cache-dependency-path: apps/server/go.mod
+          # go.sum을 쓴다. 간접 의존성 버전은 go.mod에 다 적히지 않으므로
+          # go.mod를 키로 삼으면 캐시가 실제 의존성 집합과 어긋날 수 있다.
+          cache-dependency-path: apps/server/go.sum
 
       # gofmt는 어긋난 파일 이름을 출력할 뿐 실패하지 않는다. 출력이 있으면 여기서 멈춘다.
       - name: gofmt
