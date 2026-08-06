@@ -102,6 +102,14 @@ type Loop struct {
 	commands  chan command
 }
 
+// New는 루프를 만들지만 돌리지는 않는다. 상태가 살아나는 것은 Run부터다 —
+// 그 전에 Join을 부르면 명령이 채널 버퍼에 쌓여 있다가 ctx 취소로 실패한다.
+//
+// g는 이 뒤로 수정하지 말 것. 루프와 모든 연결이 같은 *Graph를 동시에 읽는데,
+// 아무도 잠그지 않는다. 안 변한다는 것이 그 전제다.
+//
+// needTicks는 구간 하나를 지나는 데 걸리는 틱 수다. 1보다 작으면
+// DefaultNeedTicks로 되돌린다.
 func New(g *graph.Graph, needTicks int) *Loop {
 	if needTicks < 1 {
 		needTicks = DefaultNeedTicks
@@ -150,6 +158,13 @@ func (l *Loop) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 }
 
+// Leave는 플레이어를 지우고 그 사람의 구독 채널을 닫는다. 가진 땅도 함께 놓는다.
+//
+// 이미 없는 플레이어를 넘겨도 조용히 넘어간다 — 연결이 끊기는 경로가 여럿이라
+// 두 번 불릴 수 있고, 그것 때문에 실패할 이유는 없다.
+//
+// ctx는 명령을 넣을 때까지만 쓴다. 끊긴 연결을 정리하는 자리에서는 이미 취소된
+// ctx를 물려받기 쉬우므로, 부르는 쪽에서 context.WithoutCancel로 취소를 떼어낼 것.
 func (l *Loop) Leave(ctx context.Context, id PlayerID) error {
 	return l.send(ctx, command{kind: cmdLeave, id: id})
 }
