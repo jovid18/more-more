@@ -11,12 +11,14 @@ import (
 // 점령 판정은 state를 직접 만들어 본다. 루프를 거치면 플레이어를 원하는 자리에
 // 놓을 수 없어서, 정작 확인하고 싶은 "같은 틱에 같은 곳" 상황을 만들기 어렵다.
 //
-// needTicks 1로 두면 매 틱이 도착이라 시나리오가 짧아진다.
+// 넘기는 Move의 TotalTicks를 1로 두면 매 틱이 도착이라 시나리오가 짧아진다.
+// 도착 뒤에 오르는 다음 구간은 지도의 값(3틱)을 받지만, 여기 테스트들은
+// 도착의 결과만 보므로 상관없다.
 func placed(t *testing.T, moves map[PlayerID]Move, order ...PlayerID) (*state, *graph.Graph) {
 	t.Helper()
 
 	g := graph.Yamanote()
-	s := newState(g, 1)
+	s := newState(g)
 
 	for _, id := range order {
 		m, ok := moves[id]
@@ -41,7 +43,7 @@ func edgeIndex(t *testing.T, g *graph.Graph, a, b graph.StationID) int {
 }
 
 func arriving(from, to graph.StationID) Move {
-	return Move{From: from, To: to, Progress: 0, NeedTicks: 1}
+	return Move{From: from, To: to, Progress: 0, TotalTicks: 1}
 }
 
 func TestFinishingAnEdgeClaimsItAndTheStationReached(t *testing.T) {
@@ -203,7 +205,7 @@ func TestSnapshotsCarryOwnershipToSubscribers(t *testing.T) {
 	sess := mustJoin(t, l, "hana")
 	recv(t, sess.Snapshots)
 
-	for range DefaultNeedTicks {
+	for range graph.YamanoteTravelTicks {
 		ticks <- time.Time{}
 	}
 

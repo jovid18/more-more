@@ -15,7 +15,7 @@ const stations: Vec2[] = [
 const [A, B, C] = [0, 1, 2];
 
 function move(from: number, to: number, progress: number): Move {
-  return { from, to, progress, needTicks: 3 };
+  return { from, to, progress, totalTicks: 3 };
 }
 
 // 보간은 소유 현황을 보지 않는다. 비워 둔다.
@@ -34,7 +34,7 @@ function expectPoint(actual: Vec2 | undefined, want: Vec2) {
 }
 
 describe('movePosition', () => {
-  it('progress 0은 출발역, needTicks는 도착역', () => {
+  it('progress 0은 출발역, totalTicks는 도착역', () => {
     expectPoint(movePosition(move(A, B, 0), stations) ?? undefined, { x: 0, y: 0 });
     expectPoint(movePosition(move(A, B, 3), stations) ?? undefined, { x: 3, y: 0 });
   });

@@ -25,6 +25,23 @@ type Station struct {
 type Edge struct {
 	A StationID `json:"a"`
 	B StationID `json:"b"`
+
+	// TravelTicks는 이 구간을 건너는 데 걸리는 틱 수다. 이 모델에서 그것이 곧
+	// 구간의 길이다 — 좌표가 없으므로 거리를 시간으로 표현한다. 1 이상이어야 한다.
+	TravelTicks int `json:"travelTicks"`
+}
+
+// edgeKey는 구간을 찾는 열쇠다. Edge를 그대로 쓰지 않는 이유는 TravelTicks가
+// 붙어 있어서다 — 값이 다르면 같은 구간을 못 찾는다.
+type edgeKey struct {
+	a, b StationID
+}
+
+func keyFor(a, b StationID) edgeKey {
+	if a > b {
+		a, b = b, a
+	}
+	return edgeKey{a: a, b: b}
 }
 
 // ErrJunction은 차수가 3 이상인 역에서 다음 행선지를 물었을 때 나온다.
@@ -36,9 +53,9 @@ type Graph struct {
 	edges    []Edge
 	adj      [][]StationID // 인덱스 = StationID
 
-	// 정규화된 Edge에서 edges 슬라이스의 인덱스로. 점령 판정이 매 틱
-	// "방금 지나온 구간이 몇 번인가"를 물으므로 미리 만들어 둔다.
-	index map[Edge]int
+	// 구간에서 edges 슬라이스의 인덱스로. 점령 판정이 매 틱 "방금 지나온 구간이
+	// 몇 번인가"를 묻고, 도착할 때마다 "다음 구간이 몇 틱인가"를 물으므로 미리 만들어 둔다.
+	index map[edgeKey]int
 }
 
 // New는 역과 구간을 검사한 뒤 그래프를 만든다.
@@ -56,7 +73,7 @@ func New(stations []Station, edges []Edge) (*Graph, error) {
 		stations: slices.Clone(stations),
 		edges:    make([]Edge, 0, len(edges)),
 		adj:      make([][]StationID, len(stations)),
-		index:    make(map[Edge]int, len(edges)),
+		index:    make(map[edgeKey]int, len(edges)),
 	}
 
 	for _, e := range edges {
@@ -66,15 +83,21 @@ func New(stations []Station, edges []Edge) (*Graph, error) {
 		if e.A == e.B {
 			return nil, fmt.Errorf("graph: station %d has an edge to itself", e.A)
 		}
+		// 0틱이면 플레이어가 그 구간에서 영원히 도착하지 못하거나 순간이동한다.
+		// 어느 쪽이든 조용히 넘기면 원인을 찾기 어려운 버그가 된다.
+		if e.TravelTicks < 1 {
+			return nil, fmt.Errorf("graph: edge %d-%d has travelTicks %d, want at least 1", e.A, e.B, e.TravelTicks)
+		}
 
 		if e.A > e.B {
 			e.A, e.B = e.B, e.A
 		}
-		if _, taken := g.index[e]; taken {
+		key := keyFor(e.A, e.B)
+		if _, taken := g.index[key]; taken {
 			return nil, fmt.Errorf("graph: edge %d-%d appears twice", e.A, e.B)
 		}
 
-		g.index[e] = len(g.edges)
+		g.index[key] = len(g.edges)
 		g.edges = append(g.edges, e)
 		g.adj[e.A] = append(g.adj[e.A], e.B)
 		g.adj[e.B] = append(g.adj[e.B], e.A)
@@ -99,11 +122,18 @@ func (g *Graph) EdgeCount() int { return len(g.edges) }
 // EdgeIndex는 두 역을 잇는 구간의 번호를 돌려준다. 방향은 상관없다.
 // 스냅샷의 소유 배열이 이 번호로 색인되므로, 클라이언트가 받는 edges 순서와 같다.
 func (g *Graph) EdgeIndex(a, b StationID) (int, bool) {
-	if a > b {
-		a, b = b, a
-	}
-	i, ok := g.index[Edge{A: a, B: b}]
+	i, ok := g.index[keyFor(a, b)]
 	return i, ok
+}
+
+// TravelTicks는 두 역을 잇는 구간을 건너는 데 걸리는 틱 수다. 방향은 상관없다.
+// 이어지지 않은 두 역이면 false.
+func (g *Graph) TravelTicks(a, b StationID) (int, bool) {
+	i, ok := g.index[keyFor(a, b)]
+	if !ok {
+		return 0, false
+	}
+	return g.edges[i].TravelTicks, true
 }
 
 // Neighbors는 id에 붙은 역들을 돌려준다. 반환된 슬라이스를 수정하지 말 것 —
