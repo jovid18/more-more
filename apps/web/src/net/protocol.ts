@@ -1,0 +1,171 @@
+/**
+ * 서버와 주고받는 메시지의 형태.
+ *
+ * Go 쪽 `internal/hub`의 구조체와 짝이 맞아야 한다. 한쪽만 바꾸면 컴파일은
+ * 통과하고 런타임에 조용히 어긋나므로, 여기 손대면 반대편도 같이 볼 것.
+ * 두 언어를 잇는 스키마는 아직 없다 — 메시지가 늘면 그때 만든다.
+ */
+
+export type StationId = number;
+export type PlayerId = number;
+
+export interface Station {
+  id: StationId;
+  name: string;
+  romaji: string;
+}
+
+export interface Edge {
+  a: StationId;
+  b: StationId;
+}
+
+/**
+ * 좌표가 없다. 서버는 "needTicks 중 progress번째"까지만 알고,
+ * 그 사이를 메우는 것은 클라이언트의 보간이다.
+ */
+export interface Move {
+  from: StationId;
+  to: StationId;
+  progress: number;
+  needTicks: number;
+}
+
+export interface PlayerState {
+  id: PlayerId;
+  name: string;
+  move: Move;
+}
+
+export interface WelcomeMessage {
+  type: 'welcome';
+  you: PlayerId;
+  tickMs: number;
+  stations: Station[];
+  edges: Edge[];
+}
+
+export interface SnapshotMessage {
+  type: 'snapshot';
+  tick: number;
+  players: PlayerState[];
+}
+
+export type ServerMessage = WelcomeMessage | SnapshotMessage;
+
+export type ClientMessage = { type: 'reverse' };
+
+/**
+ * 네트워크로 들어온 문자열을 검사해서 메시지로 만든다. 모양이 어긋나면 null이다.
+ *
+ * 서버가 보냈다는 이유로 믿지 않는다 — 배포 중 버전이 갈리면 필드가 빠진 채로
+ * 올 수 있고, 그때 화면이 깨지는 것보다 그 메시지 하나를 버리는 편이 낫다.
+ */
+export function parseServerMessage(raw: string): ServerMessage | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  switch (value['type']) {
+    case 'welcome':
+      return parseWelcome(value);
+    case 'snapshot':
+      return parseSnapshot(value);
+    default:
+      return null;
+  }
+}
+
+function parseWelcome(value: Record<string, unknown>): WelcomeMessage | null {
+  const you = value['you'];
+  const tickMs = value['tickMs'];
+  const stations = value['stations'];
+  const edges = value['edges'];
+
+  if (typeof you !== 'number' || typeof tickMs !== 'number' || !Array.isArray(stations) || !Array.isArray(edges)) {
+    return null;
+  }
+
+  const parsedStations: Station[] = [];
+  for (const entry of stations) {
+    if (!isRecord(entry) || typeof entry['id'] !== 'number') {
+      return null;
+    }
+    parsedStations.push({
+      id: entry['id'],
+      name: typeof entry['name'] === 'string' ? entry['name'] : '',
+      romaji: typeof entry['romaji'] === 'string' ? entry['romaji'] : '',
+    });
+  }
+
+  const parsedEdges: Edge[] = [];
+  for (const entry of edges) {
+    if (!isRecord(entry) || typeof entry['a'] !== 'number' || typeof entry['b'] !== 'number') {
+      return null;
+    }
+    parsedEdges.push({ a: entry['a'], b: entry['b'] });
+  }
+
+  return { type: 'welcome', you, tickMs, stations: parsedStations, edges: parsedEdges };
+}
+
+function parseSnapshot(value: Record<string, unknown>): SnapshotMessage | null {
+  const tick = value['tick'];
+  const players = value['players'];
+
+  if (typeof tick !== 'number' || !Array.isArray(players)) {
+    return null;
+  }
+
+  const parsed: PlayerState[] = [];
+  for (const entry of players) {
+    if (!isRecord(entry) || typeof entry['id'] !== 'number') {
+      return null;
+    }
+    const move = parseMove(entry['move']);
+    if (!move) {
+      return null;
+    }
+    parsed.push({
+      id: entry['id'],
+      name: typeof entry['name'] === 'string' ? entry['name'] : '',
+      move,
+    });
+  }
+
+  return { type: 'snapshot', tick, players: parsed };
+}
+
+function parseMove(value: unknown): Move | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const from = value['from'];
+  const to = value['to'];
+  const progress = value['progress'];
+  const needTicks = value['needTicks'];
+
+  if (
+    typeof from !== 'number' ||
+    typeof to !== 'number' ||
+    typeof progress !== 'number' ||
+    typeof needTicks !== 'number' ||
+    needTicks <= 0
+  ) {
+    return null;
+  }
+
+  return { from, to, progress, needTicks };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
