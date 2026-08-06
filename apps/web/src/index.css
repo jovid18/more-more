@@ -1,6 +1,11 @@
 :root {
   color-scheme: dark;
   font-family: system-ui, sans-serif;
+
+  --ink: #e6e9ef;
+  --dim: #94a3b8;
+  --panel: rgb(15 20 30 / 82%);
+  --line: rgb(148 163 184 / 22%);
 }
 
 * {
@@ -10,10 +15,108 @@
 
 body {
   background: #0b0d12;
-  color: #e6e9ef;
+  color: var(--ink);
 }
 
 #root {
   block-size: 100dvh;
   inline-size: 100dvw;
+}
+
+.stage {
+  position: relative;
+  block-size: 100%;
+  inline-size: 100%;
+}
+
+.canvas {
+  display: block;
+  block-size: 100%;
+  inline-size: 100%;
+}
+
+/* 화면 위에 얹는 것들은 캔버스의 포인터 이벤트를 가리지 않는다.
+   버튼만 다시 켜준다 — 나중에 지도를 드래그하게 될 때를 위한 것이다. */
+.hud,
+.reverse {
+  position: absolute;
+  pointer-events: none;
+}
+
+.hud {
+  inset-block-start: 1rem;
+  inset-inline-start: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.status {
+  display: block;
+  font-weight: 600;
+}
+
+.status-open {
+  color: #7dd3fc;
+}
+
+.status-connecting {
+  color: #fbbf24;
+}
+
+.status-closed {
+  color: #fb7185;
+}
+
+.name {
+  display: block;
+  color: var(--dim);
+}
+
+.hud dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0 0.75rem;
+  margin-block-start: 0.5rem;
+  color: var(--dim);
+}
+
+.hud dd {
+  margin: 0;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.reverse {
+  inset-block-end: 1.5rem;
+  inset-inline-start: 50%;
+  translate: -50% 0;
+  padding: 0.7rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.reverse:hover {
+  border-color: #7dd3fc;
+}
+
+.reverse kbd {
+  margin-inline-start: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  color: var(--dim);
+  font-size: 0.78em;
 }
