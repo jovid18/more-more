@@ -29,11 +29,19 @@ export interface Frame {
   edges: readonly Edge[];
   players: readonly RenderedPlayer[];
   you: PlayerId | null;
+
+  /** 인덱스 = 구간·역 번호, 값 = 주인. 0은 주인 없음. 이것도 참조로 변경을 가린다. */
+  edgeOwners: readonly PlayerId[];
+  stationOwners: readonly PlayerId[];
 }
 
 // 자리를 미리 잡아두고 그 안에서만 쓴다. 매 프레임 버퍼를 새로 만들면
 // GC가 프레임 사이에 끼어들어 화면이 걸린다.
 const maxPlayers = 256;
+
+// 주인 없는 땅. 색을 완전히 죽이지 않는 것은 지도의 모양은 늘 보여야 하기 때문이다.
+const unownedTrack = new Color('#28323f');
+const unownedStation = new Color('#5a6b80');
 
 /**
  * 캔버스에 지도와 플레이어를 그린다. 정리 함수를 돌려준다.
@@ -61,18 +69,22 @@ export function mountScene(canvas: HTMLCanvasElement, getFrame: () => Frame): ()
   scene.add(map);
 
   const trackGeometry = new BufferGeometry();
-  const track = new LineSegments(trackGeometry, new LineBasicMaterial({ color: '#334155' }));
+  const track = new LineSegments(trackGeometry, new LineBasicMaterial({ vertexColors: true }));
 
   const stationGeometry = new BufferGeometry();
-  const stationDots = new Points(stationGeometry, dotMaterial(dot, { color: '#64748b', size: 0.08 }));
+  const stationDots = new Points(stationGeometry, dotMaterial(dot, { size: 0.08, vertexColors: true }));
 
   map.add(track, stationDots);
 
   let drawnStations: readonly Vec2[] | null = null;
+  let trackColors: Float32Array | null = null;
+  let stationColors: Float32Array | null = null;
 
   const buildMap = (stations: readonly Vec2[], edges: readonly Edge[]) => {
     stationGeometry.dispose();
     stationGeometry.setAttribute('position', new BufferAttribute(toPositionArray(stations), 3));
+    stationColors = new Float32Array(stations.length * 3);
+    stationGeometry.setAttribute('color', new BufferAttribute(stationColors, 3));
 
     // LineSegments는 정점을 둘씩 짝지어 선분 하나로 본다. 구간마다 양 끝을 적는다.
     const segments = new Float32Array(edges.length * 6);
@@ -93,6 +105,8 @@ export function mountScene(canvas: HTMLCanvasElement, getFrame: () => Frame): ()
 
     trackGeometry.dispose();
     trackGeometry.setAttribute('position', new BufferAttribute(segments, 3));
+    trackColors = new Float32Array(segments.length);
+    trackGeometry.setAttribute('color', new BufferAttribute(trackColors, 3));
     trackGeometry.setDrawRange(0, cursor / 3);
   };
 
@@ -115,6 +129,38 @@ export function mountScene(canvas: HTMLCanvasElement, getFrame: () => Frame): ()
 
   const scratch = new Color();
 
+  // 소유 현황은 틱마다만 바뀐다. 배열의 참조로 그것을 알아채고, 바뀌었을 때만
+  // 색을 다시 칠한다 — 매 프레임 수백 개 float을 쓸 이유가 없다.
+  let paintedEdges: readonly PlayerId[] | null = null;
+  let paintedStations: readonly PlayerId[] | null = null;
+
+  const paintOwners = (frame: Frame) => {
+    if (trackColors) {
+      for (let i = 0; i < trackColors.length / 6; i++) {
+        const owner = frame.edgeOwners[i] ?? 0;
+        colorFor(owner, 0.42, scratch, unownedTrack);
+        // 선분 하나에 정점이 둘이다. 양쪽 다 같은 색으로 칠해야 균일하게 보인다.
+        for (let vertex = 0; vertex < 2; vertex++) {
+          trackColors[i * 6 + vertex * 3] = scratch.r;
+          trackColors[i * 6 + vertex * 3 + 1] = scratch.g;
+          trackColors[i * 6 + vertex * 3 + 2] = scratch.b;
+        }
+      }
+      trackGeometry.getAttribute('color').needsUpdate = true;
+    }
+
+    if (stationColors) {
+      for (let i = 0; i < stationColors.length / 3; i++) {
+        const owner = frame.stationOwners[i] ?? 0;
+        colorFor(owner, 0.58, scratch, unownedStation);
+        stationColors[i * 3] = scratch.r;
+        stationColors[i * 3 + 1] = scratch.g;
+        stationColors[i * 3 + 2] = scratch.b;
+      }
+      stationGeometry.getAttribute('color').needsUpdate = true;
+    }
+  };
+
   const resize = () => {
     const { clientWidth, clientHeight } = canvas;
     if (clientWidth === 0 || clientHeight === 0) {
@@ -136,6 +182,15 @@ export function mountScene(canvas: HTMLCanvasElement, getFrame: () => Frame): ()
     if (frame.stations !== drawnStations) {
       buildMap(frame.stations, frame.edges);
       drawnStations = frame.stations;
+      // 지도를 새로 만들었으니 색 버퍼도 새것이다. 다시 칠해야 한다.
+      paintedEdges = null;
+      paintedStations = null;
+    }
+
+    if (frame.edgeOwners !== paintedEdges || frame.stationOwners !== paintedStations) {
+      paintOwners(frame);
+      paintedEdges = frame.edgeOwners;
+      paintedStations = frame.stationOwners;
     }
 
     let count = 0;
@@ -198,8 +253,17 @@ export function mountScene(canvas: HTMLCanvasElement, getFrame: () => Frame): ()
  * 플레이어 색. 황금각(137.5°)씩 돌리면 인접한 ID끼리도 색이 확실히 갈린다.
  * 단순히 id * 30 같은 식으로 하면 12명마다 같은 색이 돈다.
  */
-function hueFor(id: PlayerId): number {
+export function hueFor(id: PlayerId): number {
   return ((id * 137.508) % 360) / 360;
+}
+
+/** 주인이 있으면 그 사람의 색, 없으면 기본색. 밝기로 땅과 말을 구분한다. */
+function colorFor(owner: PlayerId, lightness: number, out: Color, unowned: Color): void {
+  if (owner === 0) {
+    out.copy(unowned);
+    return;
+  }
+  out.setHSL(hueFor(owner), 0.7, lightness);
 }
 
 /**

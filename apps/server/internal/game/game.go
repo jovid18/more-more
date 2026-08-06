@@ -59,6 +59,14 @@ type PlayerState struct {
 type Snapshot struct {
 	Tick    uint64        `json:"tick"`
 	Players []PlayerState `json:"players"`
+
+	// 인덱스는 구간·역 번호이고, 값은 주인의 PlayerID다. 0은 주인이 없다는 뜻이다
+	// (PlayerID는 1부터 나간다). 구간 번호는 welcome으로 보낸 edges 순서와 같다.
+	//
+	// 이름에 Owners를 붙인 것은 welcome의 edges(지도 구간 목록)와 구별하기
+	// 위해서다. 같은 키에 다른 의미를 담으면 클라이언트가 조용히 잘못 읽는다.
+	EdgeOwners    []PlayerID `json:"edgeOwners"`
+	StationOwners []PlayerID `json:"stationOwners"`
 }
 
 // Session은 접속한 플레이어에게 주어지는 손잡이다.
@@ -94,6 +102,14 @@ type Loop struct {
 	commands  chan command
 }
 
+// New는 루프를 만들지만 돌리지는 않는다. 상태가 살아나는 것은 Run부터다 —
+// 그 전에 Join을 부르면 명령이 채널 버퍼에 쌓여 있다가 ctx 취소로 실패한다.
+//
+// g는 이 뒤로 수정하지 말 것. 루프와 모든 연결이 같은 *Graph를 동시에 읽는데,
+// 아무도 잠그지 않는다. 안 변한다는 것이 그 전제다.
+//
+// needTicks는 구간 하나를 지나는 데 걸리는 틱 수다. 1보다 작으면
+// DefaultNeedTicks로 되돌린다.
 func New(g *graph.Graph, needTicks int) *Loop {
 	if needTicks < 1 {
 		needTicks = DefaultNeedTicks
@@ -142,6 +158,13 @@ func (l *Loop) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 }
 
+// Leave는 플레이어를 지우고 그 사람의 구독 채널을 닫는다. 가진 땅도 함께 놓는다.
+//
+// 이미 없는 플레이어를 넘겨도 조용히 넘어간다 — 연결이 끊기는 경로가 여럿이라
+// 두 번 불릴 수 있고, 그것 때문에 실패할 이유는 없다.
+//
+// ctx는 명령을 넣을 때까지만 쓴다. 끊긴 연결을 정리하는 자리에서는 이미 취소된
+// ctx를 물려받기 쉬우므로, 부르는 쪽에서 context.WithoutCancel로 취소를 떼어낼 것.
 func (l *Loop) Leave(ctx context.Context, id PlayerID) error {
 	return l.send(ctx, command{kind: cmdLeave, id: id})
 }
@@ -206,14 +229,21 @@ type state struct {
 	order   []PlayerID
 	players map[PlayerID]*player
 	subs    map[PlayerID]chan Snapshot
+
+	// 인덱스로 찾는다. 맵이 아니라 슬라이스인 것은 매 틱 통째로 복사해
+	// 스냅샷에 싣기 때문이다.
+	edgeOwner    []PlayerID
+	stationOwner []PlayerID
 }
 
 func newState(g *graph.Graph, needTicks int) *state {
 	return &state{
-		graph:     g,
-		needTicks: needTicks,
-		players:   make(map[PlayerID]*player),
-		subs:      make(map[PlayerID]chan Snapshot),
+		graph:        g,
+		needTicks:    needTicks,
+		players:      make(map[PlayerID]*player),
+		subs:         make(map[PlayerID]chan Snapshot),
+		edgeOwner:    make([]PlayerID, g.EdgeCount()),
+		stationOwner: make([]PlayerID, g.Len()),
 	}
 }
 
@@ -267,6 +297,19 @@ func (s *state) leave(id PlayerID) {
 	delete(s.players, id)
 	s.order = slices.DeleteFunc(s.order, func(other PlayerID) bool { return other == id })
 
+	// 나간 사람의 땅은 놓는다. 다시 들어오면 새 ID를 받으므로, 그대로 두면
+	// 주인 없는 색이 지도에 쌓이기만 한다.
+	for i, owner := range s.edgeOwner {
+		if owner == id {
+			s.edgeOwner[i] = 0
+		}
+	}
+	for i, owner := range s.stationOwner {
+		if owner == id {
+			s.stationOwner[i] = 0
+		}
+	}
+
 	if ch, ok := s.subs[id]; ok {
 		close(ch)
 		delete(s.subs, id)
@@ -291,8 +334,20 @@ func (s *state) reverse(id PlayerID) {
 	}
 }
 
+// arrival은 이번 틱에 구간 하나를 끝낸 플레이어다.
+type arrival struct {
+	player  PlayerID
+	edge    int
+	station graph.StationID
+}
+
 func (s *state) advance() {
 	s.tick++
+
+	// 1단계: 전원을 옮기고 도착만 모아 둔다. 여기서 점령을 판정하지 않는 것이
+	// 중요하다 — 옮기는 김에 그 자리에서 판정하면 s.order 앞쪽 플레이어가 먼저
+	// 먹게 되고, 접속 순서가 승패를 가른다.
+	var arrivals []arrival
 
 	for _, id := range s.order {
 		p := s.players[id]
@@ -302,17 +357,68 @@ func (s *state) advance() {
 			continue
 		}
 
+		if edge, ok := s.graph.EdgeIndex(p.move.From, p.move.To); ok {
+			arrivals = append(arrivals, arrival{player: id, edge: edge, station: p.move.To})
+		}
+
 		// 도착했다. 역에 머무는 상태는 두지 않고 곧바로 다음 구간에 올린다 —
-		// 플레이어는 언제나 어느 구간 위에 있다. 점령·경합 판정이 들어올 자리가 여기다.
+		// 플레이어는 언제나 어느 구간 위에 있다.
 		next, err := s.graph.Next(p.move.To, p.move.From)
 		if err != nil {
-			// M1의 야마노테선에는 갈림길이 없으므로 여기 오면 그래프가 바뀐 것이다.
+			// 야마노테선에는 갈림길이 없으므로 여기 오면 그래프가 바뀐 것이다.
 			// 멈춰 세우는 대신 왔던 길로 되돌린다.
 			slog.Warn("advance: cannot pick the next station", "player", id, "at", p.move.To, "err", err)
 			next = p.move.From
 		}
 
 		p.move = Move{From: p.move.To, To: next, NeedTicks: s.needTicks}
+	}
+
+	// 2단계: 전원이 다 움직인 뒤에 판정한다.
+	s.claim(arrivals)
+}
+
+// claim은 이번 틱의 도착을 소유권으로 옮긴다.
+//
+// **규칙은 하나다. 한 틱에 정확히 한 명이 닿은 곳만 주인이 바뀐다.**
+//
+// 짧지만 두 가지가 여기서 따라 나온다. 첫째, 수비가 유리하다 — 지키러 온 주인과
+// 뺏으러 온 사람이 같은 틱에 닿으면 아무 일도 없고, 주인이 그대로 남는다.
+// 둘째, 뭉쳐 다니면 아무도 못 먹는다. 같은 구간을 나란히 달리는 두 사람은
+// 서로를 계속 상쇄한다.
+//
+// 판정 순서에 기대지 않는 것도 요점이다. 각 구간·역은 서로 독립적으로 정해지므로
+// 맵을 무슨 순서로 돌든 결과가 같다.
+func (s *state) claim(arrivals []arrival) {
+	if len(arrivals) == 0 {
+		return
+	}
+
+	type claim struct {
+		by    PlayerID
+		count int
+	}
+
+	edges := make(map[int]claim, len(arrivals))
+	stations := make(map[graph.StationID]claim, len(arrivals))
+
+	for _, a := range arrivals {
+		e := edges[a.edge]
+		edges[a.edge] = claim{by: a.player, count: e.count + 1}
+
+		st := stations[a.station]
+		stations[a.station] = claim{by: a.player, count: st.count + 1}
+	}
+
+	for index, c := range edges {
+		if c.count == 1 {
+			s.edgeOwner[index] = c.by
+		}
+	}
+	for id, c := range stations {
+		if c.count == 1 {
+			s.stationOwner[id] = c.by
+		}
 	}
 }
 
@@ -322,7 +428,15 @@ func (s *state) snapshot() Snapshot {
 		p := s.players[id]
 		players = append(players, PlayerState{ID: id, Name: p.name, Move: p.move})
 	}
-	return Snapshot{Tick: s.tick, Players: players}
+
+	return Snapshot{
+		Tick:    s.tick,
+		Players: players,
+		// 복사한다. 방송된 스냅샷은 구독자 여럿이 같은 슬라이스를 나눠 가지므로,
+		// 원본을 그대로 실으면 다음 틱의 변경이 이미 보낸 스냅샷까지 바꿔 놓는다.
+		EdgeOwners:    slices.Clone(s.edgeOwner),
+		StationOwners: slices.Clone(s.stationOwner),
+	}
 }
 
 func (s *state) broadcast() {

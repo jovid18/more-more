@@ -49,6 +49,16 @@ export interface SnapshotMessage {
   type: 'snapshot';
   tick: number;
   players: PlayerState[];
+
+  /**
+   * 인덱스는 구간·역 번호, 값은 주인의 PlayerId다. 0은 주인 없음(PlayerId는 1부터).
+   * 구간 번호는 welcome의 `edges` 순서와 같다.
+   *
+   * welcome의 `edges`와 이름을 나눈 것은 의도적이다 — 한쪽은 지도의 구간 목록이고
+   * 이쪽은 그 구간의 주인이라, 같은 키를 쓰면 조용히 잘못 읽힌다.
+   */
+  edgeOwners: PlayerId[];
+  stationOwners: PlayerId[];
 }
 
 export type ServerMessage = WelcomeMessage | SnapshotMessage;
@@ -124,6 +134,12 @@ function parseSnapshot(value: Record<string, unknown>): SnapshotMessage | null {
     return null;
   }
 
+  const edgeOwners = parseOwners(value['edgeOwners']);
+  const stationOwners = parseOwners(value['stationOwners']);
+  if (!edgeOwners || !stationOwners) {
+    return null;
+  }
+
   const parsed: PlayerState[] = [];
   for (const entry of players) {
     if (!isRecord(entry) || typeof entry['id'] !== 'number') {
@@ -140,7 +156,22 @@ function parseSnapshot(value: Record<string, unknown>): SnapshotMessage | null {
     });
   }
 
-  return { type: 'snapshot', tick, players: parsed };
+  return { type: 'snapshot', tick, players: parsed, edgeOwners, stationOwners };
+}
+
+function parseOwners(value: unknown): PlayerId[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const owners: PlayerId[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'number') {
+      return null;
+    }
+    owners.push(entry);
+  }
+  return owners;
 }
 
 function parseMove(value: unknown): Move | null {

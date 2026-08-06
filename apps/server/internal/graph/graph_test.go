@@ -106,6 +106,46 @@ func TestNext(t *testing.T) {
 	})
 }
 
+func TestEdgeIndex(t *testing.T) {
+	t.Parallel()
+
+	g := Yamanote()
+
+	t.Run("방향과 무관하게 같은 번호", func(t *testing.T) {
+		t.Parallel()
+		forward, ok := g.EdgeIndex(3, 4)
+		if !ok {
+			t.Fatal("EdgeIndex(3, 4) not found")
+		}
+		backward, ok := g.EdgeIndex(4, 3)
+		if !ok {
+			t.Fatal("EdgeIndex(4, 3) not found")
+		}
+		if forward != backward {
+			t.Errorf("EdgeIndex(3,4) = %d but EdgeIndex(4,3) = %d", forward, backward)
+		}
+	})
+
+	// 스냅샷의 소유 배열이 이 번호로 색인되므로, 번호가 Edges()의 자리와
+	// 어긋나면 클라이언트가 엉뚱한 구간을 칠한다.
+	t.Run("Edges()의 자리와 맞는다", func(t *testing.T) {
+		t.Parallel()
+		for want, edge := range g.Edges() {
+			got, ok := g.EdgeIndex(edge.A, edge.B)
+			if !ok || got != want {
+				t.Fatalf("EdgeIndex(%d, %d) = %d, %v; want %d", edge.A, edge.B, got, ok, want)
+			}
+		}
+	})
+
+	t.Run("이어지지 않은 두 역은 없다", func(t *testing.T) {
+		t.Parallel()
+		if _, ok := g.EdgeIndex(0, 15); ok {
+			t.Error("EdgeIndex found an edge between stations that are not adjacent")
+		}
+	})
+}
+
 func TestNewRejectsMalformedInput(t *testing.T) {
 	t.Parallel()
 

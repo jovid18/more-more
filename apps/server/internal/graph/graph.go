@@ -35,6 +35,10 @@ type Graph struct {
 	stations []Station
 	edges    []Edge
 	adj      [][]StationID // 인덱스 = StationID
+
+	// 정규화된 Edge에서 edges 슬라이스의 인덱스로. 점령 판정이 매 틱
+	// "방금 지나온 구간이 몇 번인가"를 물으므로 미리 만들어 둔다.
+	index map[Edge]int
 }
 
 // New는 역과 구간을 검사한 뒤 그래프를 만든다.
@@ -52,9 +56,9 @@ func New(stations []Station, edges []Edge) (*Graph, error) {
 		stations: slices.Clone(stations),
 		edges:    make([]Edge, 0, len(edges)),
 		adj:      make([][]StationID, len(stations)),
+		index:    make(map[Edge]int, len(edges)),
 	}
 
-	seen := make(map[Edge]bool, len(edges))
 	for _, e := range edges {
 		if !g.Contains(e.A) || !g.Contains(e.B) {
 			return nil, fmt.Errorf("graph: edge %d-%d refers to an unknown station", e.A, e.B)
@@ -66,11 +70,11 @@ func New(stations []Station, edges []Edge) (*Graph, error) {
 		if e.A > e.B {
 			e.A, e.B = e.B, e.A
 		}
-		if seen[e] {
+		if _, taken := g.index[e]; taken {
 			return nil, fmt.Errorf("graph: edge %d-%d appears twice", e.A, e.B)
 		}
-		seen[e] = true
 
+		g.index[e] = len(g.edges)
 		g.edges = append(g.edges, e)
 		g.adj[e.A] = append(g.adj[e.A], e.B)
 		g.adj[e.B] = append(g.adj[e.B], e.A)
@@ -89,7 +93,18 @@ func (g *Graph) Contains(id StationID) bool {
 func (g *Graph) Stations() []Station { return slices.Clone(g.stations) }
 func (g *Graph) Edges() []Edge       { return slices.Clone(g.edges) }
 
-func (g *Graph) Len() int { return len(g.stations) }
+func (g *Graph) Len() int       { return len(g.stations) }
+func (g *Graph) EdgeCount() int { return len(g.edges) }
+
+// EdgeIndex는 두 역을 잇는 구간의 번호를 돌려준다. 방향은 상관없다.
+// 스냅샷의 소유 배열이 이 번호로 색인되므로, 클라이언트가 받는 edges 순서와 같다.
+func (g *Graph) EdgeIndex(a, b StationID) (int, bool) {
+	if a > b {
+		a, b = b, a
+	}
+	i, ok := g.index[Edge{A: a, B: b}]
+	return i, ok
+}
 
 // Neighbors는 id에 붙은 역들을 돌려준다. 반환된 슬라이스를 수정하지 말 것 —
 // 매 틱 도는 경로라 여기서는 복사하지 않는다.

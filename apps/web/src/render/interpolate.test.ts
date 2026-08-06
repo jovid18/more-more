@@ -18,8 +18,9 @@ function move(from: number, to: number, progress: number): Move {
   return { from, to, progress, needTicks: 3 };
 }
 
+// 보간은 소유 현황을 보지 않는다. 비워 둔다.
 function snapshot(tick: number, ...players: PlayerState[]): SnapshotMessage {
-  return { type: 'snapshot', tick, players };
+  return { type: 'snapshot', tick, players, edgeOwners: [], stationOwners: [] };
 }
 
 function player(id: number, m: Move): PlayerState {
