@@ -1,32 +1,45 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# ─── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Editors ───────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+
+# ─── Go ────────────────────────────────────────────────────
+# 컴파일 산출물과 테스트 바이너리. 의존성은 module cache에 있으므로
+# vendor/는 쓰지 않는다 — 쓰게 되면 그때 커밋 여부를 정한다.
+/apps/server/bin/
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
 
-# Code coverage profiles and other test artifacts
+# 커버리지 프로파일
 *.out
 coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
+# go.work는 커밋하지 않는다. 로컬에서 여러 모듈을 엮는 개인 설정이다.
 go.work
 go.work.sum
 
-# env file
-.env
+# ─── Node / Web ────────────────────────────────────────────
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+.pnpm-store/
+*.tsbuildinfo
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# ─── Secrets ───────────────────────────────────────────────
+.env
+.env.*
+!.env.example
