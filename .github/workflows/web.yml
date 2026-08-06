@@ -10,7 +10,8 @@ on:
   pull_request:
 
 jobs:
-  check:
+  # job 이름이 그대로 필수 체크의 컨텍스트가 된다. server.yml과 겹치면 안 된다.
+  web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
