@@ -1,0 +1,30 @@
+# apps/web과 그 툴체인 검증. 로컬에서 `pnpm lint && pnpm typecheck && pnpm test && pnpm build`와 같다.
+#
+# lint는 루트에서 돈다 — oxfmt가 마크다운까지 포맷하므로 docs와 README도 여기서 검사된다.
+
+name: Web
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build

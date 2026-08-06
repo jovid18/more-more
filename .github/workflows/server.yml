@@ -1,0 +1,43 @@
+# apps/server 검증. 로컬에서 그 디렉터리에 들어가 돌리는 것과 같다.
+#
+# -race는 빼지 않는다. 이 프로젝트에서 가장 값비싼 버그는 데이터 경합이고,
+# 그것만 CI가 사람보다 확실히 잘 잡는다.
+
+name: Server
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: apps/server
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/server/go.mod
+          # go.sum이 아직 없다(의존성 0개). 없는 파일을 캐시 키로 주면 setup-go가 멈추므로
+          # go.mod를 쓴다. 의존성이 생기면 go.sum으로 바꾸는 편이 정확하다 —
+          # 간접 의존성 버전은 go.mod에 다 적히지 않는다.
+          cache-dependency-path: apps/server/go.mod
+
+      # gofmt는 어긋난 파일 이름을 출력할 뿐 실패하지 않는다. 출력이 있으면 여기서 멈춘다.
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "✗ gofmt가 어긋난 파일:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./...

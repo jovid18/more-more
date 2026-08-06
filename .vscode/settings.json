@@ -1,0 +1,43 @@
+{
+  // 이 레포의 TS·마크다운 포매터는 oxfmt 하나다. Go는 gopls(gofmt)가 맡는다.
+  //
+  // 전역 설정이 Prettier를 기본 포매터로 두고 formatOnSave를 켜둔 상태라면,
+  // 그대로 저장할 때 Prettier(printWidth 100)와 oxfmt(120)가 매번 싸운다.
+  // 저장할 때마다 diff가 생기고 CI의 `oxfmt --check`가 떨어진다.
+  //
+  // oxc 확장은 마크다운·css·html·json·ts를 모두 포맷한다. 전역 설정에
+  // "[markdown]": { formatOnSave: true }가 Prettier로 잡혀 있으면 문서를
+  // 저장할 때마다 100칸으로 접히며 표가 틀어진다.
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "oxc.oxc-vscode",
+
+  "[typescript]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+  "[typescriptreact]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+  "[javascript]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+  "[json]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+  "[jsonc]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+  "[css]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+  "[html]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+  "[markdown]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+
+  // 확장이 내장한 버전이 아니라 lockfile이 고정한 버전을 쓴다.
+  // 버전이 갈리면 에디터와 CI의 판정이 달라진다.
+  "oxc.path.oxlint": "./node_modules/.bin/oxlint",
+  "oxc.path.oxfmt": "./node_modules/.bin/oxfmt",
+
+  // ─── Go ──────────────────────────────────────────────────
+  // go.mod가 루트가 아니라 apps/server에 있다. 이걸 알려주지 않으면
+  // gopls가 워크스페이스 루트에서 모듈을 못 찾고 기능이 절반만 돈다.
+  "gopls": {
+    "build.directoryFilters": ["-node_modules"]
+  },
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": { "source.organizeImports": "explicit" }
+  },
+  "go.lintTool": "staticcheck",
+
+  // 이 프로젝트의 요점은 동시성이다. 저장할 때마다 race detector로 테스트를 돌린다.
+  "go.testFlags": ["-race"]
+}
