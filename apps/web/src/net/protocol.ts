@@ -18,17 +18,26 @@ export interface Station {
 export interface Edge {
   a: StationId;
   b: StationId;
+
+  /**
+   * 이 구간을 건너는 데 걸리는 틱 수. 좌표가 없으므로 이것이 구간의 길이다.
+   * 점수 가중치가 여기 붙는다.
+   */
+  travelTicks: number;
 }
 
 /**
- * 좌표가 없다. 서버는 "needTicks 중 progress번째"까지만 알고,
+ * 좌표가 없다. 서버는 "totalTicks 중 progress번째"까지만 알고,
  * 그 사이를 메우는 것은 클라이언트의 보간이다.
+ *
+ * totalTicks는 그 구간의 `Edge.travelTicks`를 베껴 온 값이다. 지도를 다시 뒤지지
+ * 않아도 되게 실려 오고, 나중에 플레이어별 속도 보정이 생기면 둘이 갈라진다.
  */
 export interface Move {
   from: StationId;
   to: StationId;
   progress: number;
-  needTicks: number;
+  totalTicks: number;
 }
 
 export interface PlayerState {
@@ -120,7 +129,12 @@ function parseWelcome(value: Record<string, unknown>): WelcomeMessage | null {
     if (!isRecord(entry) || typeof entry['a'] !== 'number' || typeof entry['b'] !== 'number') {
       return null;
     }
-    parsedEdges.push({ a: entry['a'], b: entry['b'] });
+    // 0이나 음수면 서버가 나눗셈의 분모로 쓰지 못할 값을 보낸 것이다.
+    const travelTicks = entry['travelTicks'];
+    if (typeof travelTicks !== 'number' || travelTicks <= 0) {
+      return null;
+    }
+    parsedEdges.push({ a: entry['a'], b: entry['b'], travelTicks });
   }
 
   return { type: 'welcome', you, tickMs, stations: parsedStations, edges: parsedEdges };
@@ -182,19 +196,19 @@ function parseMove(value: unknown): Move | null {
   const from = value['from'];
   const to = value['to'];
   const progress = value['progress'];
-  const needTicks = value['needTicks'];
+  const totalTicks = value['totalTicks'];
 
   if (
     typeof from !== 'number' ||
     typeof to !== 'number' ||
     typeof progress !== 'number' ||
-    typeof needTicks !== 'number' ||
-    needTicks <= 0
+    typeof totalTicks !== 'number' ||
+    totalTicks <= 0
   ) {
     return null;
   }
 
-  return { from, to, progress, needTicks };
+  return { from, to, progress, totalTicks };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

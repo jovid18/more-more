@@ -2,10 +2,18 @@ package graph
 
 import "strings"
 
+// YamanoteTravelTicks는 야마노테선 구간 하나를 건너는 데 걸리는 틱 수다.
+//
+// **[미확정]** 실제 역간 소요 시간을 아직 넣지 않았다. 30구간이 모두 같은 값이면
+// 길이라는 개념이 사실상 없는 셈이지만, 눈대중으로 채우면 근거 없는 숫자가
+// 밸런스의 기준이 된다. JR 시각표에서 실측치를 가져오면 이 상수는 사라지고
+// 구간마다 값이 갈린다 — 그때 점수 가중치도 저절로 갈린다.
+const YamanoteTravelTicks = 3
+
 // 야마노테선 30역. 東京에서 시작해 外回り(시계 방향, 品川·渋谷·新宿 순) 순서다.
 //
 // 좌표는 아직 없다. 실제 위경도가 필요한 것은 가지 노선이 붙어 노선도가 겹칠
-// 때이고, 그때 출처를 갖춘 데이터를 넣는다. M1에서 중요한 것은 위상(30역 순환)
+// 때이고, 그때 출처를 갖춘 데이터를 넣는다. 지금 중요한 것은 위상(30역 순환)
 // 뿐이라 클라이언트가 원형으로 배치해 그린다.
 var yamanoteStations = []string{
 	"東京|Tokyo",
@@ -56,7 +64,11 @@ func Yamanote() *Graph {
 	edges := make([]Edge, n)
 	for i := range n {
 		// 마지막 역(神田)은 첫 역(東京)으로 이어져 고리를 닫는다.
-		edges[i] = Edge{A: StationID(i), B: StationID((i + 1) % n)}
+		edges[i] = Edge{
+			A:           StationID(i),
+			B:           StationID((i + 1) % n),
+			TravelTicks: YamanoteTravelTicks,
+		}
 	}
 
 	// 입력이 상수라 여기서 실패하면 이 파일의 버그다. 호출자에게 떠넘길 것이 없다.

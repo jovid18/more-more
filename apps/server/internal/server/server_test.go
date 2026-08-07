@@ -17,7 +17,7 @@ func testMux(t *testing.T) *http.ServeMux {
 	t.Helper()
 
 	board := graph.Yamanote()
-	loop := game.New(board, game.DefaultNeedTicks)
+	loop := game.New(board)
 	return newMux(t.Context(), hub.New(loop, board, TickInterval))
 }
 

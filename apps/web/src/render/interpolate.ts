@@ -18,7 +18,7 @@ export function movePosition(move: Move, stations: readonly Vec2[]): Vec2 | null
     return null;
   }
 
-  const t = clamp01(move.progress / move.needTicks);
+  const t = clamp01(move.progress / move.totalTicks);
   return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
 }
 

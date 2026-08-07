@@ -28,8 +28,11 @@ const (
 	// TickInterval은 시뮬레이션 주기다. 2Hz.
 	//
 	// 반응속도를 겨루는 게임이 아니라 전략 게임이라 이 정도로 충분하고,
-	// 서버가 느린 만큼은 클라이언트 보간이 메운다. 구간당 3틱이므로
-	// 역 사이가 1.5초, 야마노테 한 바퀴가 45초다.
+	// 서버가 느린 만큼은 클라이언트 보간이 메운다.
+	//
+	// 게임 속도를 조절하는 손잡이는 이것 하나다. 구간의 길이는 지도가 정하고
+	// (graph.Edge.TravelTicks), 이 값은 그 틱이 실제로 얼마나 걸리는지를 정한다.
+	// 지금은 구간당 3틱이므로 역 사이가 1.5초, 야마노테 한 바퀴가 45초다.
 	TickInterval = 500 * time.Millisecond
 )
 
@@ -53,7 +56,7 @@ func newMux(ctx context.Context, h *hub.Hub) *http.ServeMux {
 // 연결이 이미 닫힌 채널을 보게 된다.
 func Run(ctx context.Context, addr string) error {
 	board := graph.Yamanote()
-	loop := game.New(board, game.DefaultNeedTicks)
+	loop := game.New(board)
 
 	ticker := time.NewTicker(TickInterval)
 	defer ticker.Stop()

@@ -17,7 +17,7 @@ const waitTimeout = 2 * time.Second
 func startLoop(t *testing.T) (*Loop, chan<- time.Time) {
 	t.Helper()
 
-	l := New(graph.Yamanote(), DefaultNeedTicks)
+	l := New(graph.Yamanote())
 	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -100,8 +100,8 @@ func TestJoinSendsTheCurrentStateImmediately(t *testing.T) {
 	if p.Name != "hana" {
 		t.Errorf("name = %q, want %q", p.Name, "hana")
 	}
-	if p.Move.Progress != 0 || p.Move.NeedTicks != DefaultNeedTicks {
-		t.Errorf("move = %+v, want progress 0 and needTicks %d", p.Move, DefaultNeedTicks)
+	if p.Move.Progress != 0 || p.Move.TotalTicks != graph.YamanoteTravelTicks {
+		t.Errorf("move = %+v, want progress 0 and needTicks %d", p.Move, graph.YamanoteTravelTicks)
 	}
 	if p.Move.From == p.Move.To {
 		t.Errorf("move starts and ends at the same station %d", p.Move.From)
@@ -115,7 +115,7 @@ func TestEachTickAdvancesProgressByOne(t *testing.T) {
 	sess := mustJoin(t, l, "hana")
 	start := onlyPlayer(t, recv(t, sess.Snapshots)).Move
 
-	for i := 1; i < DefaultNeedTicks; i++ {
+	for i := 1; i < graph.YamanoteTravelTicks; i++ {
 		ticks <- time.Time{}
 
 		snap := recv(t, sess.Snapshots)
@@ -133,7 +133,7 @@ func TestEachTickAdvancesProgressByOne(t *testing.T) {
 	}
 }
 
-// NeedTicks번째 틱에 도착한다. 역에 머무는 상태는 없으므로 그 자리에서
+// TotalTicks번째 틱에 도착한다. 역에 머무는 상태는 없으므로 그 자리에서
 // 곧바로 다음 구간에 오르고, progress는 0으로 돌아간다.
 func TestArrivalMovesOntoTheNextEdge(t *testing.T) {
 	t.Parallel()
@@ -142,7 +142,7 @@ func TestArrivalMovesOntoTheNextEdge(t *testing.T) {
 	sess := mustJoin(t, l, "hana")
 	start := onlyPlayer(t, recv(t, sess.Snapshots)).Move
 
-	for range DefaultNeedTicks {
+	for range graph.YamanoteTravelTicks {
 		ticks <- time.Time{}
 	}
 
@@ -168,7 +168,7 @@ func TestOneFullLapReturnsToTheStart(t *testing.T) {
 	start := onlyPlayer(t, recv(t, sess.Snapshots)).Move
 
 	stations := graph.Yamanote().Len()
-	for range stations * DefaultNeedTicks {
+	for range stations * graph.YamanoteTravelTicks {
 		ticks <- time.Time{}
 	}
 
@@ -194,7 +194,7 @@ func TestReverseMirrorsProgressWithinTheEdge(t *testing.T) {
 	// 명령 채널은 FIFO다. Reverse 다음에 요청한 스냅샷에는 반드시 반영돼 있다.
 	move := onlyPlayer(t, mustSnapshot(t, l)).Move
 
-	want := Move{From: start.To, To: start.From, Progress: DefaultNeedTicks - 1, NeedTicks: DefaultNeedTicks}
+	want := Move{From: start.To, To: start.From, Progress: graph.YamanoteTravelTicks - 1, TotalTicks: graph.YamanoteTravelTicks}
 	if move != want {
 		t.Errorf("move = %+v, want %+v", move, want)
 	}
@@ -262,7 +262,7 @@ func TestASilentSubscriberDoesNotStallTheLoop(t *testing.T) {
 func TestRunClosesEverySubscriberWhenTheContextEnds(t *testing.T) {
 	t.Parallel()
 
-	l := New(graph.Yamanote(), DefaultNeedTicks)
+	l := New(graph.Yamanote())
 	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -301,7 +301,7 @@ func TestCommandsFailOnceTheCallerContextIsDone(t *testing.T) {
 
 	// 일부러 Run을 띄우지 않는다. 명령 채널을 비우는 쪽이 없으므로
 	// 버퍼가 찬 뒤에는 ctx만이 호출자를 풀어줄 수 있다.
-	l := New(graph.Yamanote(), DefaultNeedTicks)
+	l := New(graph.Yamanote())
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

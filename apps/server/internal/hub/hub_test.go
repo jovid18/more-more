@@ -48,7 +48,7 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 
 	g := graph.Yamanote()
-	loop := game.New(g, game.DefaultNeedTicks)
+	loop := game.New(g)
 	ticks := make(chan time.Time)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -181,7 +181,7 @@ func TestEveryTickSendsASnapshot(t *testing.T) {
 	}
 	start := first.Players[0].Move
 
-	for i := 1; i <= game.DefaultNeedTicks; i++ {
+	for i := 1; i <= graph.YamanoteTravelTicks; i++ {
 		h.ticks <- time.Time{}
 
 		msg := readSnapshot(t, conn)
@@ -191,7 +191,7 @@ func TestEveryTickSendsASnapshot(t *testing.T) {
 
 		move := msg.Players[0].Move
 		switch {
-		case i < game.DefaultNeedTicks:
+		case i < graph.YamanoteTravelTicks:
 			if move.Progress != i {
 				t.Errorf("tick %d: progress = %d, want %d", i, move.Progress, i)
 			}

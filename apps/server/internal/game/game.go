@@ -18,10 +18,6 @@ import (
 )
 
 const (
-	// DefaultNeedTicks는 구간 하나를 지나는 데 걸리는 틱 수다.
-	// MVP에서는 모든 구간이 같다.
-	DefaultNeedTicks = 3
-
 	// 명령 채널 버퍼. 루프는 매 순간 select로 명령을 받으므로 보통 비어 있다.
 	// 버퍼는 틱 처리 중에 들어온 입력이 연결 goroutine을 붙잡지 않게 하는 완충일 뿐이다.
 	commandBuffer = 32
@@ -39,10 +35,17 @@ type PlayerID int64
 // 부드럽게 잇는 것은 클라이언트가 보간으로 한다. 덕분에 틱이 느려도
 // 화면은 매끄럽고, 판정은 정수 비교라 애매한 경계가 생기지 않는다.
 type Move struct {
-	From      graph.StationID `json:"from"`
-	To        graph.StationID `json:"to"`
-	Progress  int             `json:"progress"`
-	NeedTicks int             `json:"needTicks"`
+	From graph.StationID `json:"from"`
+	To   graph.StationID `json:"to"`
+
+	// Progress는 몇 틱째인지, TotalTicks는 몇 틱이 걸리는지다. 둘은 분자와 분모로
+	// 함께 읽힌다 — 클라이언트는 Progress/TotalTicks 비율로 위치를 낸다.
+	//
+	// TotalTicks는 출발할 때 그 구간의 graph.Edge.TravelTicks를 베껴 온 것이다.
+	// 베끼는 이유는 나중에 플레이어별 속도 보정이 생기면 이 값이 구간의 기본값과
+	// 갈라지기 때문이고, 그때도 클라이언트는 스냅샷만 보고 그릴 수 있어야 한다.
+	Progress   int `json:"progress"`
+	TotalTicks int `json:"totalTicks"`
 }
 
 type PlayerState struct {
@@ -97,9 +100,8 @@ type command struct {
 }
 
 type Loop struct {
-	graph     *graph.Graph
-	needTicks int
-	commands  chan command
+	graph    *graph.Graph
+	commands chan command
 }
 
 // New는 루프를 만들지만 돌리지는 않는다. 상태가 살아나는 것은 Run부터다 —
@@ -108,16 +110,12 @@ type Loop struct {
 // g는 이 뒤로 수정하지 말 것. 루프와 모든 연결이 같은 *Graph를 동시에 읽는데,
 // 아무도 잠그지 않는다. 안 변한다는 것이 그 전제다.
 //
-// needTicks는 구간 하나를 지나는 데 걸리는 틱 수다. 1보다 작으면
-// DefaultNeedTicks로 되돌린다.
-func New(g *graph.Graph, needTicks int) *Loop {
-	if needTicks < 1 {
-		needTicks = DefaultNeedTicks
-	}
+// 구간마다 몇 틱이 걸리는지는 g가 들고 있다 — 이 함수에 설정으로 넘기지 않는다.
+// 길이는 지도의 성질이고, 게임의 설정이 아니다.
+func New(g *graph.Graph) *Loop {
 	return &Loop{
-		graph:     g,
-		needTicks: needTicks,
-		commands:  make(chan command, commandBuffer),
+		graph:    g,
+		commands: make(chan command, commandBuffer),
 	}
 }
 
@@ -190,7 +188,7 @@ func (l *Loop) send(ctx context.Context, c command) error {
 // ticks를 주입받는 이유는 테스트다. 실제 서버는 time.Ticker의 채널을 넘기고,
 // 테스트는 직접 만든 채널에 신호를 넣어 시간을 기다리지 않고 틱을 진행시킨다.
 func (l *Loop) Run(ctx context.Context, ticks <-chan time.Time) {
-	st := newState(l.graph, l.needTicks)
+	st := newState(l.graph)
 	// 루프가 끝나면 구독 채널을 전부 닫는다. 각 연결의 쓰기 goroutine이
 	// 닫힌 채널을 보고 스스로 빠져나가는 것이 종료 신호다.
 	defer st.closeAll()
@@ -218,8 +216,7 @@ type player struct {
 }
 
 type state struct {
-	graph     *graph.Graph
-	needTicks int
+	graph *graph.Graph
 
 	tick   uint64
 	nextID PlayerID
@@ -236,10 +233,9 @@ type state struct {
 	stationOwner []PlayerID
 }
 
-func newState(g *graph.Graph, needTicks int) *state {
+func newState(g *graph.Graph) *state {
 	return &state{
 		graph:        g,
-		needTicks:    needTicks,
 		players:      make(map[PlayerID]*player),
 		subs:         make(map[PlayerID]chan Snapshot),
 		edgeOwner:    make([]PlayerID, g.EdgeCount()),
@@ -275,9 +271,18 @@ func (s *state) join(c command) {
 	}
 
 	// 어느 이웃으로 출발하든 상관없다. 방향은 Reverse로 바꾼다.
+	to := neighbors[0]
+	total, ok := s.graph.TravelTicks(from, to)
+	if !ok {
+		// Neighbors가 이웃이라고 답했으니 구간이 있어야 한다. 없으면 그래프가 깨졌다.
+		slog.Error("join: no edge between neighbouring stations", "from", from, "to", to)
+		close(c.replySession)
+		return
+	}
+
 	s.players[id] = &player{
 		name: c.name,
-		move: Move{From: from, To: neighbors[0], NeedTicks: s.needTicks},
+		move: Move{From: from, To: to, TotalTicks: total},
 	}
 	s.order = append(s.order, id)
 
@@ -327,10 +332,10 @@ func (s *state) reverse(id PlayerID) {
 	// 3틱 구간의 1틱 지점에서 뒤집으면 반대편에서 2틱 지점이다.
 	m := p.move
 	p.move = Move{
-		From:      m.To,
-		To:        m.From,
-		Progress:  m.NeedTicks - m.Progress,
-		NeedTicks: m.NeedTicks,
+		From:       m.To,
+		To:         m.From,
+		Progress:   m.TotalTicks - m.Progress,
+		TotalTicks: m.TotalTicks,
 	}
 }
 
@@ -353,7 +358,7 @@ func (s *state) advance() {
 		p := s.players[id]
 		p.move.Progress++
 
-		if p.move.Progress < p.move.NeedTicks {
+		if p.move.Progress < p.move.TotalTicks {
 			continue
 		}
 
@@ -371,7 +376,16 @@ func (s *state) advance() {
 			next = p.move.From
 		}
 
-		p.move = Move{From: p.move.To, To: next, NeedTicks: s.needTicks}
+		// 다음 구간의 길이는 지도에서 읽는다. 구간마다 다를 수 있으므로
+		// 이전 구간의 값을 물려주면 안 된다.
+		total, ok := s.graph.TravelTicks(p.move.To, next)
+		if !ok {
+			// 여기 오면 그래프가 깨진 것이다. 멈춰 세우기보다 직전 길이로 이어 붙인다.
+			slog.Error("advance: no edge to the next station", "player", id, "from", p.move.To, "to", next)
+			total = p.move.TotalTicks
+		}
+
+		p.move = Move{From: p.move.To, To: next, TotalTicks: total}
 	}
 
 	// 2단계: 전원이 다 움직인 뒤에 판정한다.

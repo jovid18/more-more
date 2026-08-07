@@ -62,7 +62,7 @@ func TestNext(t *testing.T) {
 
 	line, err := New(
 		[]Station{{ID: 0}, {ID: 1}, {ID: 2}},
-		[]Edge{{A: 0, B: 1}, {A: 1, B: 2}},
+		[]Edge{{A: 0, B: 1, TravelTicks: 1}, {A: 1, B: 2, TravelTicks: 1}},
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -88,7 +88,7 @@ func TestNext(t *testing.T) {
 		t.Parallel()
 		junction, err := New(
 			[]Station{{ID: 0}, {ID: 1}, {ID: 2}, {ID: 3}},
-			[]Edge{{A: 0, B: 1}, {A: 1, B: 2}, {A: 1, B: 3}},
+			[]Edge{{A: 0, B: 1, TravelTicks: 1}, {A: 1, B: 2, TravelTicks: 1}, {A: 1, B: 3, TravelTicks: 1}},
 		)
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -146,6 +146,72 @@ func TestEdgeIndex(t *testing.T) {
 	})
 }
 
+func TestTravelTicks(t *testing.T) {
+	t.Parallel()
+
+	g := Yamanote()
+
+	t.Run("방향과 무관하게 같은 값", func(t *testing.T) {
+		t.Parallel()
+		forward, ok := g.TravelTicks(3, 4)
+		if !ok {
+			t.Fatal("TravelTicks(3, 4) not found")
+		}
+		backward, _ := g.TravelTicks(4, 3)
+		if forward != backward {
+			t.Errorf("TravelTicks(3,4) = %d but TravelTicks(4,3) = %d", forward, backward)
+		}
+	})
+
+	// 실측치가 들어오면 이 단정이 깨진다. 그때 이 테스트를 지우는 것이
+	// "구간 길이가 갈리기 시작했다"는 표시가 된다.
+	t.Run("야마노테는 아직 전 구간이 같다", func(t *testing.T) {
+		t.Parallel()
+		for _, edge := range g.Edges() {
+			if edge.TravelTicks != YamanoteTravelTicks {
+				t.Fatalf("edge %d-%d has travelTicks %d, want %d",
+					edge.A, edge.B, edge.TravelTicks, YamanoteTravelTicks)
+			}
+		}
+	})
+
+	t.Run("이어지지 않은 두 역은 없다", func(t *testing.T) {
+		t.Parallel()
+		if _, ok := g.TravelTicks(0, 15); ok {
+			t.Error("TravelTicks found an edge between stations that are not adjacent")
+		}
+	})
+}
+
+// 구간마다 길이가 다른 그래프에서도 조회가 맞아야 한다. 야마노테선은 전부 같은
+// 값이라 이 검사를 통과하지 못한다 — 값을 뒤섞어도 눈치채지 못하기 때문이다.
+func TestTravelTicksWithVaryingLengths(t *testing.T) {
+	t.Parallel()
+
+	g, err := New(
+		[]Station{{ID: 0}, {ID: 1}, {ID: 2}},
+		[]Edge{{A: 0, B: 1, TravelTicks: 2}, {A: 1, B: 2, TravelTicks: 7}},
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, tt := range []struct {
+		a, b StationID
+		want int
+	}{
+		{0, 1, 2},
+		{1, 0, 2},
+		{1, 2, 7},
+		{2, 1, 7},
+	} {
+		got, ok := g.TravelTicks(tt.a, tt.b)
+		if !ok || got != tt.want {
+			t.Errorf("TravelTicks(%d, %d) = %d, %v; want %d", tt.a, tt.b, got, ok, tt.want)
+		}
+	}
+}
+
 func TestNewRejectsMalformedInput(t *testing.T) {
 	t.Parallel()
 
@@ -154,9 +220,15 @@ func TestNewRejectsMalformedInput(t *testing.T) {
 		edges    []Edge
 	}{
 		"id가 인덱스와 다름": {[]Station{{ID: 0}, {ID: 7}}, nil},
-		"없는 역 참조":     {[]Station{{ID: 0}}, []Edge{{A: 0, B: 5}}},
-		"자기 자신 연결":    {[]Station{{ID: 0}}, []Edge{{A: 0, B: 0}}},
-		"같은 구간 중복":    {[]Station{{ID: 0}, {ID: 1}}, []Edge{{A: 0, B: 1}, {A: 1, B: 0}}},
+		"없는 역 참조":     {[]Station{{ID: 0}}, []Edge{{A: 0, B: 5, TravelTicks: 1}}},
+		"자기 자신 연결":    {[]Station{{ID: 0}}, []Edge{{A: 0, B: 0, TravelTicks: 1}}},
+		"같은 구간 중복":    {[]Station{{ID: 0}, {ID: 1}}, []Edge{{A: 0, B: 1, TravelTicks: 1}, {A: 1, B: 0, TravelTicks: 1}}},
+		// 0틱이면 도착 판정이 첫 틱에 걸려 순간이동하고, 음수면 영영 도착하지 못한다.
+		"travelTicks 0": {[]Station{{ID: 0}, {ID: 1}}, []Edge{{A: 0, B: 1}}},
+		"travelTicks 음수": {
+			[]Station{{ID: 0}, {ID: 1}},
+			[]Edge{{A: 0, B: 1, TravelTicks: -2}},
+		},
 	}
 
 	for name, tt := range tests {
