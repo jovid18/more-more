@@ -77,6 +77,25 @@ body {
   color: var(--dim);
 }
 
+/* 시계는 판의 리듬을 재는 값이라 다른 숫자보다 크게 둔다. */
+.clock {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-block-start: 0.5rem;
+  padding-block-start: 0.5rem;
+  border-block-start: 1px solid var(--line);
+  color: var(--dim);
+}
+
+.clock time {
+  color: var(--ink);
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .hud dl {
   display: grid;
   grid-template-columns: auto auto;
@@ -90,6 +109,77 @@ body {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
   text-align: end;
+}
+
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  margin-block-start: 0.65rem;
+  padding: 0.6rem 0 0;
+  border-block-start: 1px solid var(--line);
+  list-style: none;
+}
+
+.board li {
+  display: grid;
+  grid-template-columns: 0.6rem 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--dim);
+}
+
+/* 여럿이 붙으면 내 줄을 못 찾는다. 지도 위의 흰 말과 같은 역할이다. */
+.board li.me {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.chip {
+  inline-size: 0.6rem;
+  block-size: 0.6rem;
+  border-radius: 50%;
+}
+
+.board .who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board .pts {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 판이 끝났다는 것은 화면 한가운데서 말해야 한다. HUD 구석에 적으면 놓친다. */
+.result {
+  position: absolute;
+  inset-block-start: 32%;
+  inset-inline-start: 50%;
+  translate: -50% 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1.1rem 2rem;
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  background: var(--panel);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  text-align: center;
+}
+
+.result strong {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.result span {
+  color: var(--dim);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .reverse {

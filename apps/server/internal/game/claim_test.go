@@ -18,7 +18,7 @@ func placed(t *testing.T, moves map[PlayerID]Move, order ...PlayerID) (*state, *
 	t.Helper()
 
 	g := graph.Yamanote()
-	s := newState(g)
+	s := newState(g, DefaultScoring)
 
 	for _, id := range order {
 		m, ok := moves[id]

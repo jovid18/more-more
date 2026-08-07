@@ -18,13 +18,22 @@ function move(from: number, to: number, progress: number): Move {
   return { from, to, progress, totalTicks: 3 };
 }
 
-// 보간은 소유 현황을 보지 않는다. 비워 둔다.
+// 보간은 소유·점수·국면을 보지 않는다. 비워 둔다.
 function snapshot(tick: number, ...players: PlayerState[]): SnapshotMessage {
-  return { type: 'snapshot', tick, players, edgeOwners: [], stationOwners: [] };
+  return {
+    type: 'snapshot',
+    tick,
+    players,
+    edgeOwners: [],
+    stationOwners: [],
+    phase: 'playing',
+    ticksLeft: 0,
+    winner: 0,
+  };
 }
 
 function player(id: number, m: Move): PlayerState {
-  return { id, name: `p${id}`, move: m };
+  return { id, name: `p${id}`, move: m, score: 0 };
 }
 
 function expectPoint(actual: Vec2 | undefined, want: Vec2) {
