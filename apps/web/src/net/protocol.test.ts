@@ -16,9 +16,12 @@ const welcome = {
 const snapshot = {
   type: 'snapshot',
   tick: 42,
-  players: [{ id: 1, name: 'hana', move: { from: 0, to: 1, progress: 1, totalTicks: 3 } }],
+  players: [{ id: 1, name: 'hana', move: { from: 0, to: 1, progress: 1, totalTicks: 3 }, score: 16 }],
   edgeOwners: [1],
   stationOwners: [0, 1],
+  phase: 'playing',
+  ticksLeft: 558,
+  winner: 0,
 };
 
 /** 필드 하나를 바꾼 사본. 원본을 건드리지 않고 실패 사례를 만든다. */
@@ -49,8 +52,17 @@ describe('parseServerMessage', () => {
     }
     expect(parsed.tick).toBe(42);
     expect(parsed.players[0]?.move.totalTicks).toBe(3);
+    expect(parsed.players[0]?.score).toBe(16);
     expect(parsed.edgeOwners).toEqual([1]);
     expect(parsed.stationOwners).toEqual([0, 1]);
+    expect(parsed.phase).toBe('playing');
+    expect(parsed.ticksLeft).toBe(558);
+    expect(parsed.winner).toBe(0);
+  });
+
+  it('모르는 phase는 버린다', () => {
+    expect(parseServerMessage(withField(snapshot, { phase: 'paused' }))).toBeNull();
+    expect(parseServerMessage(withField(snapshot, { phase: undefined }))).toBeNull();
   });
 
   // travelTicks와 totalTicks는 둘 다 나눗셈의 분모로 쓰인다. 0이 흘러들면

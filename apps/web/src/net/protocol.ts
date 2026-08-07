@@ -44,7 +44,11 @@ export interface PlayerState {
   id: PlayerId;
   name: string;
   move: Move;
+  score: number;
 }
+
+/** 판이 진행 중인지, 결과를 보여주는 중인지. */
+export type Phase = 'playing' | 'finished';
 
 export interface WelcomeMessage {
   type: 'welcome';
@@ -68,6 +72,14 @@ export interface SnapshotMessage {
    */
   edgeOwners: PlayerId[];
   stationOwners: PlayerId[];
+
+  phase: Phase;
+
+  /** 지금 국면이 끝나기까지 남은 틱. playing이면 판의 남은 시간, finished면 다음 판까지. */
+  ticksLeft: number;
+
+  /** 끝난 판의 승자. 0은 진행 중이거나 무승부다. */
+  winner: PlayerId;
 }
 
 export type ServerMessage = WelcomeMessage | SnapshotMessage;
@@ -167,10 +179,22 @@ function parseSnapshot(value: Record<string, unknown>): SnapshotMessage | null {
       id: entry['id'],
       name: typeof entry['name'] === 'string' ? entry['name'] : '',
       move,
+      score: typeof entry['score'] === 'number' ? entry['score'] : 0,
     });
   }
 
-  return { type: 'snapshot', tick, players: parsed, edgeOwners, stationOwners };
+  const phase = value['phase'];
+  if (phase !== 'playing' && phase !== 'finished') {
+    return null;
+  }
+
+  const ticksLeft = value['ticksLeft'];
+  const winner = value['winner'];
+  if (typeof ticksLeft !== 'number' || typeof winner !== 'number') {
+    return null;
+  }
+
+  return { type: 'snapshot', tick, players: parsed, edgeOwners, stationOwners, phase, ticksLeft, winner };
 }
 
 function parseOwners(value: unknown): PlayerId[] | null {

@@ -17,7 +17,22 @@ import (
 	"github.com/jovid18/more-more/apps/server/internal/graph"
 )
 
+// Phase는 판이 진행 중인지 끝났는지다.
+type Phase string
+
 const (
+	PhasePlaying  Phase = "playing"
+	PhaseFinished Phase = "finished"
+)
+
+const (
+	// RoundTicks는 한 판의 길이다. 2Hz에서 600틱이면 5분이고,
+	// 야마노테 한 바퀴가 45초이므로 여섯 바퀴 남짓 돌 수 있다.
+	RoundTicks = 600
+
+	// FinishedTicks는 결과를 보여주고 다음 판을 시작하기까지의 시간이다.
+	FinishedTicks = 20
+
 	// 명령 채널 버퍼. 루프는 매 순간 select로 명령을 받으므로 보통 비어 있다.
 	// 버퍼는 틱 처리 중에 들어온 입력이 연결 goroutine을 붙잡지 않게 하는 완충일 뿐이다.
 	commandBuffer = 32
@@ -49,10 +64,34 @@ type Move struct {
 }
 
 type PlayerState struct {
-	ID   PlayerID `json:"id"`
-	Name string   `json:"name"`
-	Move Move     `json:"move"`
+	ID    PlayerID `json:"id"`
+	Name  string   `json:"name"`
+	Move  Move     `json:"move"`
+	Score int      `json:"score"`
 }
+
+// Scoring은 점수 가중치다. 밸런스를 조절하는 지점을 한 곳에 모아 둔다.
+//
+// 역을 차수로 매기는 것은 README가 정한 기준이다 — 연결된 노선이 많은 허브일수록
+// 값이 나가야 한다. 야마노테선은 전 역의 차수가 2라 지금은 균일하지만, 가지 노선이
+// 붙어 차수가 갈리는 순간 손댈 것 없이 허브가 비싸진다.
+//
+// 구간을 길이로 매기는 것도 같은 이치다. 긴 구간은 건너는 데 오래 걸리므로
+// 그만큼 값이 나가야 위험을 감수할 이유가 생긴다.
+type Scoring struct {
+	// PerStationDegree는 역의 차수 하나당 점수다.
+	PerStationDegree int
+	// PerEdgeTick은 구간의 TravelTicks 하나당 점수다.
+	PerEdgeTick int
+}
+
+// DefaultScoring은 야마노테선을 기준으로 잡은 값이다.
+//
+// 역은 차수 2 × 5 = 10점, 구간은 3틱 × 2 = 6점. 역이 구간보다 비싼 것은 역이
+// 거점이고 구간은 지나가며 칠하는 땅이기 때문이다. 전 구간·전 역을 다 가지면 480점.
+//
+// 근거 있는 숫자가 아니라 시작점이다. 실제로 여러 명이 돌려 보고 고칠 자리다.
+var DefaultScoring = Scoring{PerStationDegree: 5, PerEdgeTick: 2}
 
 // Snapshot은 한 틱의 완전한 상태다. 델타가 아니다 —
 // 아무 틱에나 받아도 그것만으로 전체를 그릴 수 있어서 재접속이 공짜로 해결된다.
@@ -70,6 +109,15 @@ type Snapshot struct {
 	// 위해서다. 같은 키에 다른 의미를 담으면 클라이언트가 조용히 잘못 읽는다.
 	EdgeOwners    []PlayerID `json:"edgeOwners"`
 	StationOwners []PlayerID `json:"stationOwners"`
+
+	Phase Phase `json:"phase"`
+
+	// TicksLeft는 지금 국면이 끝나기까지 남은 틱이다. playing이면 판이 끝날 때까지,
+	// finished면 다음 판이 시작될 때까지. 클라이언트는 둘 다 같은 카운트다운으로 그린다.
+	TicksLeft int `json:"ticksLeft"`
+
+	// Winner는 끝난 판의 승자다. 0은 아직 안 끝났거나 무승부라는 뜻이다.
+	Winner PlayerID `json:"winner"`
 }
 
 // Session은 접속한 플레이어에게 주어지는 손잡이다.
@@ -101,6 +149,7 @@ type command struct {
 
 type Loop struct {
 	graph    *graph.Graph
+	scoring  Scoring
 	commands chan command
 }
 
@@ -115,6 +164,7 @@ type Loop struct {
 func New(g *graph.Graph) *Loop {
 	return &Loop{
 		graph:    g,
+		scoring:  DefaultScoring,
 		commands: make(chan command, commandBuffer),
 	}
 }
@@ -188,7 +238,7 @@ func (l *Loop) send(ctx context.Context, c command) error {
 // ticks를 주입받는 이유는 테스트다. 실제 서버는 time.Ticker의 채널을 넘기고,
 // 테스트는 직접 만든 채널에 신호를 넣어 시간을 기다리지 않고 틱을 진행시킨다.
 func (l *Loop) Run(ctx context.Context, ticks <-chan time.Time) {
-	st := newState(l.graph)
+	st := newState(l.graph, l.scoring)
 	// 루프가 끝나면 구독 채널을 전부 닫는다. 각 연결의 쓰기 goroutine이
 	// 닫힌 채널을 보고 스스로 빠져나가는 것이 종료 신호다.
 	defer st.closeAll()
@@ -221,6 +271,17 @@ type state struct {
 	tick   uint64
 	nextID PlayerID
 
+	phase Phase
+	// roundTick은 지금 국면에서 흐른 틱이다. 판이 바뀔 때마다 0으로 돌아간다.
+	// tick은 접속 시점부터 단조증가하므로 둘을 섞지 않는다.
+	roundTick int
+	winner    PlayerID
+
+	// 점수 가중치를 미리 곱해 둔다. 인덱스 = 구간·역 번호.
+	// 매 틱 스냅샷마다 세는 값이라 graph.Edges()를 반복해서 복사하지 않으려는 것이다.
+	edgeValue    []int
+	stationValue []int
+
 	// order는 맵 순회 순서가 무작위라서 둔다. 스냅샷의 플레이어 순서가
 	// 매 틱 바뀌면 클라이언트가 diff를 볼 수 없고 테스트도 흔들린다.
 	order   []PlayerID
@@ -233,9 +294,25 @@ type state struct {
 	stationOwner []PlayerID
 }
 
-func newState(g *graph.Graph) *state {
+func newState(g *graph.Graph, scoring Scoring) *state {
+	// 가중치는 지도가 안 변하므로 한 번만 곱해 둔다.
+	edges := g.Edges()
+	edgeValue := make([]int, len(edges))
+	for i, e := range edges {
+		edgeValue[i] = e.TravelTicks * scoring.PerEdgeTick
+	}
+
+	stationValue := make([]int, g.Len())
+	for i := range stationValue {
+		degree := len(g.Neighbors(graph.StationID(i)))
+		stationValue[i] = degree * scoring.PerStationDegree
+	}
+
 	return &state{
 		graph:        g,
+		phase:        PhasePlaying,
+		edgeValue:    edgeValue,
+		stationValue: stationValue,
 		players:      make(map[PlayerID]*player),
 		subs:         make(map[PlayerID]chan Snapshot),
 		edgeOwner:    make([]PlayerID, g.EdgeCount()),
@@ -348,6 +425,16 @@ type arrival struct {
 
 func (s *state) advance() {
 	s.tick++
+	s.roundTick++
+
+	// 결과를 보여주는 동안에는 아무도 움직이지 않는다. 다음 판이 시작될 때까지
+	// 지도가 그대로 남아 있어야 누가 어떻게 이겼는지 볼 수 있다.
+	if s.phase == PhaseFinished {
+		if s.roundTick >= FinishedTicks {
+			s.startRound()
+		}
+		return
+	}
 
 	// 1단계: 전원을 옮기고 도착만 모아 둔다. 여기서 점령을 판정하지 않는 것이
 	// 중요하다 — 옮기는 김에 그 자리에서 판정하면 s.order 앞쪽 플레이어가 먼저
@@ -390,6 +477,79 @@ func (s *state) advance() {
 
 	// 2단계: 전원이 다 움직인 뒤에 판정한다.
 	s.claim(arrivals)
+
+	// 3단계: 판이 끝났는지 본다. 마지막 틱의 점령까지 세고 나서 판정한다 —
+	// 종료 직전에 뺏은 땅도 점수에 들어가야 한다.
+	if s.roundTick >= RoundTicks {
+		s.finishRound()
+	}
+}
+
+// finishRound는 판을 닫고 승자를 정한다. 지도는 그대로 두어 결과를 보여준다.
+func (s *state) finishRound() {
+	s.phase = PhaseFinished
+	s.roundTick = 0
+	s.winner = 0
+
+	// 동점이면 승자가 없다. 이기지 못한 것과 진 것을 구분하지 않는 편이,
+	// 순위를 어떻게 가를지 지금 정하지 않아도 되게 한다.
+	best := 0
+	tied := false
+	for id, score := range s.scores() {
+		switch {
+		case score > best:
+			best, s.winner, tied = score, id, false
+		case score == best && id != s.winner:
+			tied = true
+		}
+	}
+	if tied || best == 0 {
+		s.winner = 0
+	}
+
+	slog.Info("round finished", "winner", s.winner, "score", best, "players", len(s.order))
+}
+
+// startRound는 지도를 비우고 새 판을 시작한다.
+//
+// 플레이어는 있던 자리에 그대로 둔다. 위치까지 되돌리면 화면에서 전원이
+// 순간이동하고, 클라이언트 보간이 그 한 틱을 직선으로 이어 그린다.
+func (s *state) startRound() {
+	s.phase = PhasePlaying
+	s.roundTick = 0
+	s.winner = 0
+
+	clear(s.edgeOwner)
+	clear(s.stationOwner)
+
+	slog.Info("round started", "players", len(s.order))
+}
+
+// scores는 플레이어별 점수를 센다. 주인 없는 땅은 0이므로 건너뛴다.
+func (s *state) scores() map[PlayerID]int {
+	scores := make(map[PlayerID]int, len(s.order))
+
+	for index, owner := range s.edgeOwner {
+		if owner != 0 {
+			scores[owner] += s.edgeValue[index]
+		}
+	}
+	for index, owner := range s.stationOwner {
+		if owner != 0 {
+			scores[owner] += s.stationValue[index]
+		}
+	}
+
+	return scores
+}
+
+// ticksLeft는 지금 국면이 끝나기까지 남은 틱이다.
+func (s *state) ticksLeft() int {
+	limit := RoundTicks
+	if s.phase == PhaseFinished {
+		limit = FinishedTicks
+	}
+	return max(limit-s.roundTick, 0)
 }
 
 // claim은 이번 틱의 도착을 소유권으로 옮긴다.
@@ -437,10 +597,12 @@ func (s *state) claim(arrivals []arrival) {
 }
 
 func (s *state) snapshot() Snapshot {
+	scores := s.scores()
+
 	players := make([]PlayerState, 0, len(s.order))
 	for _, id := range s.order {
 		p := s.players[id]
-		players = append(players, PlayerState{ID: id, Name: p.name, Move: p.move})
+		players = append(players, PlayerState{ID: id, Name: p.name, Move: p.move, Score: scores[id]})
 	}
 
 	return Snapshot{
@@ -450,6 +612,9 @@ func (s *state) snapshot() Snapshot {
 		// 원본을 그대로 실으면 다음 틱의 변경이 이미 보낸 스냅샷까지 바꿔 놓는다.
 		EdgeOwners:    slices.Clone(s.edgeOwner),
 		StationOwners: slices.Clone(s.stationOwner),
+		Phase:         s.phase,
+		TicksLeft:     s.ticksLeft(),
+		Winner:        s.winner,
 	}
 }
 

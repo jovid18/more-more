@@ -4,11 +4,11 @@ import type { Vec2 } from '@/graph/ring';
 import { ringLayout } from '@/graph/ring';
 import type { Connection, ConnectionStatus } from '@/net/connection';
 import { connect, gameSocketURL } from '@/net/connection';
-import type { Edge, PlayerId, SnapshotMessage } from '@/net/protocol';
+import type { Edge, Phase, PlayerId, PlayerState, SnapshotMessage } from '@/net/protocol';
 
 import { interpolate } from '@/render/interpolate';
 import type { Frame } from '@/render/scene';
-import { mountScene } from '@/render/scene';
+import { hueFor, mountScene } from '@/render/scene';
 
 const mapRadius = 2.4;
 
@@ -39,11 +39,51 @@ interface GameState {
 
 interface Hud {
   status: ConnectionStatus;
-  tick: number;
-  players: number;
-  /** 내가 가진 구간과 역. 점령이 늘고 있는지를 숫자로 본다. */
+  phase: Phase;
+  /** 지금 국면이 끝나기까지 남은 초. */
+  secondsLeft: number;
+  score: number;
+  /** 내가 가진 구간과 역. 점수가 어디서 나오는지를 나눠 본다. */
   edges: number;
   stations: number;
+  /** 점수 순으로 줄 세운 전원. 몇 위인지가 이 게임의 유일한 목표다. */
+  board: PlayerState[];
+  winner: PlayerId;
+  you: PlayerId | null;
+}
+
+const initialHud: Hud = {
+  status: 'connecting',
+  phase: 'playing',
+  secondsLeft: 0,
+  score: 0,
+  edges: 0,
+  stations: 0,
+  board: [],
+  winner: 0,
+  you: null,
+};
+
+function formatClock(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/** 장면과 같은 계산을 써야 순위표의 색과 지도 위의 말이 일치한다. */
+function colorOf(id: PlayerId): string {
+  return `hsl(${hueFor(id) * 360}deg 70% 62%)`;
+}
+
+function resultText(hud: Hud): string {
+  if (hud.winner === 0) {
+    return '무승부';
+  }
+
+  const champion = hud.board.find((player) => player.id === hud.winner);
+  if (!champion) {
+    return '판 종료';
+  }
+  return hud.winner === hud.you ? `승리 · ${champion.score}점` : `${champion.name} 승리 · ${champion.score}점`;
 }
 
 function countOwnedBy(owners: readonly PlayerId[], you: PlayerId | null): number {
@@ -77,7 +117,7 @@ export function App() {
   });
 
   // 화면에 글자로 나가는 것만 React 상태다.
-  const [hud, setHud] = useState<Hud>({ status: 'connecting', tick: 0, players: 0, edges: 0, stations: 0 });
+  const [hud, setHud] = useState<Hud>(initialHud);
   const [name] = useState(() => `runner-${Math.floor(Math.random() * 900 + 100)}`);
 
   useEffect(() => {
@@ -126,6 +166,21 @@ export function App() {
           // 지도가 갈렸으므로 예전 위치로 보간하지 않는다.
           state.previous = null;
           state.latest = null;
+          setHud((current) => ({ ...current, you: message.you }));
+          return;
+        }
+
+        // 지도와 크기가 맞지 않으면 버린다. 서버와 버전이 갈리면 소유 배열이
+        // 짧게 올 수 있는데, 그대로 그리면 마지막 구간들이 조용히 주인 없는
+        // 색으로 남아 원인을 찾기 어렵다.
+        if (
+          message.edgeOwners.length !== state.edges.length ||
+          message.stationOwners.length !== state.stations.length
+        ) {
+          console.warn(
+            `snapshot dropped: ${message.edgeOwners.length}/${message.stationOwners.length} owners ` +
+              `for a map of ${state.edges.length}/${state.stations.length}`,
+          );
           return;
         }
 
@@ -133,12 +188,18 @@ export function App() {
         state.latest = message;
         state.latestAt = performance.now();
 
+        const board = message.players.toSorted((a, b) => b.score - a.score);
+        const you = message.players.find((player) => player.id === state.you);
+
         setHud((current) => ({
           ...current,
-          tick: message.tick,
-          players: message.players.length,
+          phase: message.phase,
+          secondsLeft: Math.ceil((message.ticksLeft * state.tickMs) / 1000),
+          score: you?.score ?? 0,
           edges: countOwnedBy(message.edgeOwners, state.you),
           stations: countOwnedBy(message.stationOwners, state.you),
+          board,
+          winner: message.winner,
         }));
       },
     });
@@ -175,17 +236,40 @@ export function App() {
       <div className="hud">
         <span className={`status status-${hud.status}`}>{statusLabel[hud.status]}</span>
         <span className="name">{name}</span>
+
+        <div className="clock">
+          <span>{hud.phase === 'playing' ? '남은 시간' : '다음 판까지'}</span>
+          <time>{formatClock(hud.secondsLeft)}</time>
+        </div>
+
         <dl>
-          <dt>tick</dt>
-          <dd>{hud.tick}</dd>
-          <dt>players</dt>
-          <dd>{hud.players}</dd>
-          <dt>내 구간</dt>
+          <dt>내 점수</dt>
+          <dd>{hud.score}</dd>
+          <dt>구간</dt>
           <dd>{hud.edges}</dd>
-          <dt>내 역</dt>
+          <dt>역</dt>
           <dd>{hud.stations}</dd>
         </dl>
+
+        {hud.board.length > 0 && (
+          <ol className="board">
+            {hud.board.map((player) => (
+              <li key={player.id} className={player.id === hud.you ? 'me' : undefined}>
+                <span className="chip" style={{ background: colorOf(player.id) }} />
+                <span className="who">{player.name}</span>
+                <span className="pts">{player.score}</span>
+              </li>
+            ))}
+          </ol>
+        )}
       </div>
+
+      {hud.phase === 'finished' && (
+        <div className="result" role="status">
+          <strong>{resultText(hud)}</strong>
+          <span>다음 판까지 {hud.secondsLeft}초</span>
+        </div>
+      )}
 
       <button type="button" className="reverse" onClick={reverse}>
         방향 전환 <kbd>Space</kbd>
