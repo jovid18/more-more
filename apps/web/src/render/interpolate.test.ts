@@ -33,7 +33,7 @@ function snapshot(tick: number, ...players: PlayerState[]): SnapshotMessage {
 }
 
 function player(id: number, m: Move): PlayerState {
-  return { id, name: `p${id}`, move: m, score: 0 };
+  return { id, name: `p${id}`, move: m, score: 0, away: false };
 }
 
 function expectPoint(actual: Vec2 | undefined, want: Vec2) {

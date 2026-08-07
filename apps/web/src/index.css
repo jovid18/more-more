@@ -136,6 +136,15 @@ body {
   font-weight: 600;
 }
 
+/* 끊긴 사람은 흐리게. 지도 위의 말도 같이 흐려진다. */
+.board li.away {
+  opacity: 0.45;
+}
+
+.board li.away .pts {
+  font-size: 0.78em;
+}
+
 .chip {
   inline-size: 0.6rem;
   block-size: 0.6rem;

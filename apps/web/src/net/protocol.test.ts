@@ -16,7 +16,7 @@ const welcome = {
 const snapshot = {
   type: 'snapshot',
   tick: 42,
-  players: [{ id: 1, name: 'hana', move: { from: 0, to: 1, progress: 1, totalTicks: 3 }, score: 16 }],
+  players: [{ id: 1, name: 'hana', move: { from: 0, to: 1, progress: 1, totalTicks: 3 }, score: 16, away: false }],
   edgeOwners: [1],
   stationOwners: [0, 1],
   phase: 'playing',
@@ -53,11 +53,24 @@ describe('parseServerMessage', () => {
     expect(parsed.tick).toBe(42);
     expect(parsed.players[0]?.move.totalTicks).toBe(3);
     expect(parsed.players[0]?.score).toBe(16);
+    expect(parsed.players[0]?.away).toBe(false);
     expect(parsed.edgeOwners).toEqual([1]);
     expect(parsed.stationOwners).toEqual([0, 1]);
     expect(parsed.phase).toBe('playing');
     expect(parsed.ticksLeft).toBe(558);
     expect(parsed.winner).toBe(0);
+  });
+
+  // away는 없으면 false다. 나머지 필드와 달리 이건 옛 서버와도 맞물려 돌아야 한다.
+  it('away가 빠져 있으면 접속 중으로 본다', () => {
+    const players = [{ id: 1, name: 'hana', move: { from: 0, to: 1, progress: 1, totalTicks: 3 }, score: 0 }];
+    const parsed = parseServerMessage(withField(snapshot, { players }));
+
+    expect(parsed?.type).toBe('snapshot');
+    if (parsed?.type !== 'snapshot') {
+      return;
+    }
+    expect(parsed.players[0]?.away).toBe(false);
   });
 
   it('모르는 phase는 버린다', () => {

@@ -200,7 +200,7 @@ func TestReverseMirrorsProgressWithinTheEdge(t *testing.T) {
 	}
 }
 
-func TestLeaveRemovesThePlayerAndClosesTheChannel(t *testing.T) {
+func TestLeaveClosesTheChannelButKeepsTheSeat(t *testing.T) {
 	t.Parallel()
 
 	l, _ := startLoop(t)
@@ -223,9 +223,15 @@ func TestLeaveRemovesThePlayerAndClosesTheChannel(t *testing.T) {
 		t.Fatal("the channel was not closed after Leave")
 	}
 
+	// 플레이어 자체는 남는다. 유예 동안 돌아올 자리를 붙들어 두기 때문이다.
 	snap := mustSnapshot(t, l)
-	if p := onlyPlayer(t, snap); p.ID != staying.ID {
-		t.Errorf("remaining player = %d, want %d", p.ID, staying.ID)
+	if len(snap.Players) != 2 {
+		t.Fatalf("players = %d, want 2 (one of them away)", len(snap.Players))
+	}
+	for _, p := range snap.Players {
+		if want := p.ID == leaving.ID; p.Away != want {
+			t.Errorf("player %d away = %v, want %v", p.ID, p.Away, want)
+		}
 	}
 }
 

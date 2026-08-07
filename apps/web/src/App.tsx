@@ -254,10 +254,13 @@ export function App() {
         {hud.board.length > 0 && (
           <ol className="board">
             {hud.board.map((player) => (
-              <li key={player.id} className={player.id === hud.you ? 'me' : undefined}>
+              <li
+                key={player.id}
+                className={[player.id === hud.you ? 'me' : '', player.away ? 'away' : ''].filter(Boolean).join(' ')}
+              >
                 <span className="chip" style={{ background: colorOf(player.id) }} />
                 <span className="who">{player.name}</span>
-                <span className="pts">{player.score}</span>
+                <span className="pts">{player.away ? '접속 끊김' : player.score}</span>
               </li>
             ))}
           </ol>
