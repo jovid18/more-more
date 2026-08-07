@@ -5,6 +5,7 @@ export interface RenderedPlayer {
   id: PlayerId;
   name: string;
   position: Vec2;
+  away: boolean;
 }
 
 /**
@@ -68,6 +69,7 @@ export function interpolate(
     rendered.push({
       id: player.id,
       name: player.name,
+      away: player.away,
       position: start ? { x: start.x + (target.x - start.x) * t, y: start.y + (target.y - start.y) * t } : target,
     });
   }

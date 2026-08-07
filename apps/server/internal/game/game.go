@@ -33,6 +33,16 @@ const (
 	// FinishedTicks는 결과를 보여주고 다음 판을 시작하기까지의 시간이다.
 	FinishedTicks = 20
 
+	// GraceTicks는 끊긴 플레이어의 자리를 붙들어 두는 시간이다. 2Hz에서 30초.
+	//
+	// 새로고침 한 번에 판을 통째로 잃지 않을 만큼은 길어야 하고, 나간 사람의 땅이
+	// 지도를 오래 잠그지 않을 만큼은 짧아야 한다. 한 바퀴가 45초이므로
+	// 그 안에 돌아오면 판을 이어갈 수 있다.
+	GraceTicks = 60
+
+	// abandonTimeout은 Join이 포기한 뒤 등록 결과를 기다리는 시간이다.
+	abandonTimeout = 5 * time.Second
+
 	// 명령 채널 버퍼. 루프는 매 순간 select로 명령을 받으므로 보통 비어 있다.
 	// 버퍼는 틱 처리 중에 들어온 입력이 연결 goroutine을 붙잡지 않게 하는 완충일 뿐이다.
 	commandBuffer = 32
@@ -68,6 +78,10 @@ type PlayerState struct {
 	Name  string   `json:"name"`
 	Move  Move     `json:"move"`
 	Score int      `json:"score"`
+
+	// Away는 연결이 끊겨 유예 시간 안에 있다는 뜻이다. 그 자리에 멈춰 있고,
+	// 가진 땅은 그대로다. 돌아오지 않으면 유예가 끝날 때 사라진다.
+	Away bool `json:"away"`
 }
 
 // Scoring은 점수 가중치다. 밸런스를 조절하는 지점을 한 곳에 모아 둔다.
@@ -181,8 +195,29 @@ func (l *Loop) Join(ctx context.Context, name string) (Session, error) {
 	select {
 	case s := <-reply:
 		return s, nil
+
 	case <-ctx.Done():
+		// 명령은 이미 큐에 들어갔다. 루프가 등록해 버리면 아무도 나간다고
+		// 알려주지 않아 유령 플레이어가 남는다. 뒤처리를 떼어 보내고 나간다 —
+		// 여기서 기다리면 종료 경로가 그만큼 늘어진다.
+		go l.abandonJoin(reply)
 		return Session{}, ctx.Err()
+	}
+}
+
+// abandonJoin은 Join이 포기한 뒤에도 등록됐을지 모르는 플레이어를 지운다.
+//
+// 응답 채널은 버퍼 1이라 루프는 이미 보냈거나 곧 보낸다. 그 안에 안 오면
+// 루프가 명령을 처리하지 못한 것이고(대개 종료 중), 등록되지 않았으므로 할 일이 없다.
+func (l *Loop) abandonJoin(reply <-chan Session) {
+	select {
+	case s := <-reply:
+		ctx, cancel := context.WithTimeout(context.Background(), abandonTimeout)
+		defer cancel()
+		if err := l.Leave(ctx, s.ID); err != nil {
+			slog.Warn("abandonJoin: leave failed", "player", s.ID, "err", err)
+		}
+	case <-time.After(abandonTimeout):
 	}
 }
 
@@ -206,7 +241,9 @@ func (l *Loop) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 }
 
-// Leave는 플레이어를 지우고 그 사람의 구독 채널을 닫는다. 가진 땅도 함께 놓는다.
+// Leave는 연결이 끊겼다고 알린다. 플레이어를 즉시 지우지는 않는다 —
+// 그 자리에 멈춰 세우고 GraceTicks 동안 자리와 땅을 붙들어 둔다. 같은 이름으로
+// 다시 Join하면 그대로 돌려받고, 안 돌아오면 유예가 끝날 때 사라진다.
 //
 // 이미 없는 플레이어를 넘겨도 조용히 넘어간다 — 연결이 끊기는 경로가 여럿이라
 // 두 번 불릴 수 있고, 그것 때문에 실패할 이유는 없다.
@@ -263,7 +300,13 @@ func (l *Loop) Run(ctx context.Context, ticks <-chan time.Time) {
 type player struct {
 	name string
 	move Move
+
+	// awayUntil은 연결이 끊긴 플레이어를 지울 틱이다. 0이면 접속 중이다.
+	// 절대 틱으로 두면 판정이 s.tick과의 비교 한 줄로 끝난다.
+	awayUntil uint64
 }
+
+func (p *player) away() bool { return p.awayUntil != 0 }
 
 type state struct {
 	graph *graph.Graph
@@ -334,6 +377,19 @@ func (s *state) apply(c command) {
 }
 
 func (s *state) join(c command) {
+	// 유예 안에 같은 이름으로 돌아왔으면 있던 자리를 그대로 돌려준다.
+	if id, ok := s.awayNamed(c.name); ok {
+		s.players[id].awayUntil = 0
+
+		ch := make(chan Snapshot, snapshotBuffer)
+		s.subs[id] = ch
+		c.replySession <- Session{ID: id, Snapshots: ch}
+		send(ch, s.snapshot())
+
+		slog.Info("player returned", "player", id, "name", c.name)
+		return
+	}
+
 	s.nextID++
 	id := s.nextID
 
@@ -371,7 +427,42 @@ func (s *state) join(c command) {
 	send(ch, s.snapshot())
 }
 
+// awayNamed는 유예 안에 있는 같은 이름의 플레이어를 찾는다.
+//
+// 이름은 인증이 아니다. 남의 이름을 대면 그 자리를 가져갈 수 있다.
+// 혼자 또는 아는 사람끼리 하는 동안은 이걸로 충분하고, 계정이 생기면
+// 그때 토큰으로 바꾼다.
+func (s *state) awayNamed(name string) (PlayerID, bool) {
+	if name == "" {
+		return 0, false
+	}
+
+	for _, id := range s.order {
+		if p := s.players[id]; p.away() && p.name == name {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// leave는 연결이 끊긴 플레이어를 멈춰 세우고 유예 시간을 건다.
+// 자리도 땅도 그대로 두고, 구독 채널만 닫는다 — 소켓이 이미 없기 때문이다.
 func (s *state) leave(id PlayerID) {
+	p, ok := s.players[id]
+	if !ok || p.away() {
+		return
+	}
+
+	p.awayUntil = s.tick + GraceTicks
+
+	if ch, ok := s.subs[id]; ok {
+		close(ch)
+		delete(s.subs, id)
+	}
+}
+
+// remove는 유예가 끝난 플레이어를 지운다. 여기서야 땅을 놓는다.
+func (s *state) remove(id PlayerID) {
 	if _, ok := s.players[id]; !ok {
 		return
 	}
@@ -379,8 +470,8 @@ func (s *state) leave(id PlayerID) {
 	delete(s.players, id)
 	s.order = slices.DeleteFunc(s.order, func(other PlayerID) bool { return other == id })
 
-	// 나간 사람의 땅은 놓는다. 다시 들어오면 새 ID를 받으므로, 그대로 두면
-	// 주인 없는 색이 지도에 쌓이기만 한다.
+	// 돌아오지 않았으므로 땅을 놓는다. 그대로 두면 주인 없는 색이 지도에 쌓이고,
+	// 다시 들어와도 새 ID를 받으므로 되찾을 방법이 없다.
 	for i, owner := range s.edgeOwner {
 		if owner == id {
 			s.edgeOwner[i] = 0
@@ -416,6 +507,17 @@ func (s *state) reverse(id PlayerID) {
 	}
 }
 
+// evictExpired는 유예가 끝나도 돌아오지 않은 플레이어를 지운다.
+func (s *state) evictExpired() {
+	// remove가 s.order를 줄이므로 복사본을 훑는다.
+	for _, id := range slices.Clone(s.order) {
+		if p := s.players[id]; p != nil && p.away() && s.tick >= p.awayUntil {
+			slog.Info("player evicted", "player", id, "name", p.name)
+			s.remove(id)
+		}
+	}
+}
+
 // arrival은 이번 틱에 구간 하나를 끝낸 플레이어다.
 type arrival struct {
 	player  PlayerID
@@ -426,6 +528,9 @@ type arrival struct {
 func (s *state) advance() {
 	s.tick++
 	s.roundTick++
+
+	// 유예가 끝난 사람을 먼저 치운다. 이번 틱의 판정에 유령이 끼지 않게 한다.
+	s.evictExpired()
 
 	// 결과를 보여주는 동안에는 아무도 움직이지 않는다. 다음 판이 시작될 때까지
 	// 지도가 그대로 남아 있어야 누가 어떻게 이겼는지 볼 수 있다.
@@ -443,6 +548,13 @@ func (s *state) advance() {
 
 	for _, id := range s.order {
 		p := s.players[id]
+
+		// 자리를 비운 사람은 멈춰 있다. 계속 달리게 두면 접속이 끊긴 채로
+		// 땅을 계속 먹는다.
+		if p.away() {
+			continue
+		}
+
 		p.move.Progress++
 
 		if p.move.Progress < p.move.TotalTicks {
@@ -602,7 +714,13 @@ func (s *state) snapshot() Snapshot {
 	players := make([]PlayerState, 0, len(s.order))
 	for _, id := range s.order {
 		p := s.players[id]
-		players = append(players, PlayerState{ID: id, Name: p.name, Move: p.move, Score: scores[id]})
+		players = append(players, PlayerState{
+			ID:    id,
+			Name:  p.name,
+			Move:  p.move,
+			Score: scores[id],
+			Away:  p.away(),
+		})
 	}
 
 	return Snapshot{

@@ -27,6 +27,10 @@ func placed(t *testing.T, moves map[PlayerID]Move, order ...PlayerID) (*state, *
 		}
 		s.players[id] = &player{name: fmt.Sprintf("p%d", id), move: m}
 		s.order = append(s.order, id)
+
+		// 직접 넣었으므로 발급기도 같이 밀어준다. 안 그러면 이어서 join한
+		// 플레이어가 여기 놓은 것과 같은 ID를 받는다.
+		s.nextID = max(s.nextID, id)
 	}
 
 	return s, g
@@ -155,29 +159,6 @@ func TestOutcomeDoesNotDependOnPlayerOrder(t *testing.T) {
 	}
 	if !slicesEqual(first.edgeOwner, reversed.edgeOwner) {
 		t.Errorf("edge owners differ by join order:\n  %v\n  %v", first.edgeOwner, reversed.edgeOwner)
-	}
-}
-
-func TestLeavingReleasesTheLand(t *testing.T) {
-	t.Parallel()
-
-	s, g := placed(t, map[PlayerID]Move{1: arriving(0, 1)}, 1)
-	s.subs[1] = make(chan Snapshot, snapshotBuffer)
-	s.advance()
-
-	edge := edgeIndex(t, g, 0, 1)
-	if s.edgeOwner[edge] != 1 || s.stationOwner[1] != 1 {
-		t.Fatalf("expected player 1 to own edge %d and station 1 before leaving", edge)
-	}
-
-	s.leave(1)
-
-	// 다시 들어오면 새 ID를 받으므로, 놓아주지 않으면 주인 없는 색만 쌓인다.
-	if got := s.edgeOwner[edge]; got != 0 {
-		t.Errorf("edge owner = %d after leaving, want nobody", got)
-	}
-	if got := s.stationOwner[1]; got != 0 {
-		t.Errorf("station owner = %d after leaving, want nobody", got)
 	}
 }
 

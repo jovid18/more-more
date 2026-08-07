@@ -276,7 +276,7 @@ func TestLeavingTheGameClosesTheSocket(t *testing.T) {
 	}
 }
 
-func TestDisconnectingRemovesThePlayer(t *testing.T) {
+func TestDisconnectingMarksThePlayerAway(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
@@ -289,8 +289,38 @@ func TestDisconnectingRemovesThePlayer(t *testing.T) {
 	}
 
 	// 연결이 끊기면 읽기 goroutine이 죽고, 그 defer가 Leave를 보낸다.
-	// 이게 동작하지 않으면 유령 플레이어가 지도에 남는다.
-	h.waitFor(t, func(s game.Snapshot) bool { return len(s.Players) == 0 })
+	// 이게 동작하지 않으면 자리가 붙들린 채로 영영 남는다.
+	h.waitFor(t, func(s game.Snapshot) bool {
+		return len(s.Players) == 1 && s.Players[0].Away
+	})
+}
+
+// 같은 이름으로 다시 붙으면 있던 ID를 그대로 돌려받는다.
+// 새로고침 한 번에 판을 통째로 잃지 않게 하는 것이 이 기능의 요점이다.
+func TestReconnectingWithTheSameNameKeepsTheSeat(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	first := h.dial(t, "hana")
+	welcome := read(t, first)
+	readSnapshot(t, first)
+
+	if err := first.Close(websocket.StatusNormalClosure, "bye"); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	h.waitFor(t, func(s game.Snapshot) bool {
+		return len(s.Players) == 1 && s.Players[0].Away
+	})
+
+	second := h.dial(t, "hana")
+	returned := read(t, second)
+
+	if returned.You != welcome.You {
+		t.Errorf("player id after reconnecting = %d, want %d", returned.You, welcome.You)
+	}
+	h.waitFor(t, func(s game.Snapshot) bool {
+		return len(s.Players) == 1 && !s.Players[0].Away
+	})
 }
 
 func TestShuttingDownClosesOpenConnections(t *testing.T) {

@@ -205,7 +205,8 @@ export function mountScene(canvas: HTMLCanvasElement, getFrame: () => Frame): ()
       playerPositions[count * 3 + 1] = player.position.y;
       playerPositions[count * 3 + 2] = 0.01;
 
-      scratch.setHSL(hueFor(player.id), 0.7, 0.62);
+      // 자리를 비운 사람은 흐리게. 멈춰 있는 말이 왜 안 움직이는지 보이게 한다.
+      scratch.setHSL(hueFor(player.id), player.away ? 0.25 : 0.7, player.away ? 0.35 : 0.62);
       playerColors[count * 3] = scratch.r;
       playerColors[count * 3 + 1] = scratch.g;
       playerColors[count * 3 + 2] = scratch.b;

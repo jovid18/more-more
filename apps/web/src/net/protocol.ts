@@ -45,6 +45,9 @@ export interface PlayerState {
   name: string;
   move: Move;
   score: number;
+
+  /** 연결이 끊겨 유예 시간 안에 있다. 그 자리에 멈춰 있고 땅은 그대로다. */
+  away: boolean;
 }
 
 /** 판이 진행 중인지, 결과를 보여주는 중인지. */
@@ -180,6 +183,7 @@ function parseSnapshot(value: Record<string, unknown>): SnapshotMessage | null {
       name: typeof entry['name'] === 'string' ? entry['name'] : '',
       move,
       score: typeof entry['score'] === 'number' ? entry['score'] : 0,
+      away: entry['away'] === true,
     });
   }
 
